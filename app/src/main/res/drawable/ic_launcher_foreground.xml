@@ -1,0 +1,37 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    
+    <!-- Modern Abstract Box Design -->
+    <!-- Using thick strokes for a bold, clean look -->
+    
+    <!-- Main Box Outline (Hexagon shape for isometric box feel) -->
+    <!-- Scaled down by 60% and centered -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="6"
+        android:strokeLineJoin="round"
+        android:strokeLineCap="round"
+        android:pathData="M54,36 L72,45 L72,63 L54,72 L36,63 L36,45 Z" />
+        
+    <!-- Inner Y shape to define the 3 faces -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="6"
+        android:strokeLineJoin="round"
+        android:strokeLineCap="round"
+        android:pathData="M54,54 L54,72 M54,54 L36,45 M54,54 L72,45" />
+        
+    <!-- "S" stylized inside the box faces? Or maybe just a clean box is better. -->
+    <!-- Let's add a subtle detail to make it look like a package/singbox -->
+    
+    <!-- A simple dot or line on the top face to suggest a lid or opening -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,42 L60,45 L54,48 L48,45 Z" />
+        
+</vector>

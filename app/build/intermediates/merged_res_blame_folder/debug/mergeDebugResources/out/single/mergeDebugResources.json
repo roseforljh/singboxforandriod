@@ -1,0 +1,26 @@
+[
+    {
+        "merged": "com.kunk.singbox.app-debug-53:/mipmap-anydpi-v26_ic_launcher_round.xml.flat",
+        "source": "com.kunk.singbox.app-main-55:/mipmap-anydpi-v26/ic_launcher_round.xml"
+    },
+    {
+        "merged": "com.kunk.singbox.app-debug-53:/xml_backup_rules.xml.flat",
+        "source": "com.kunk.singbox.app-main-55:/xml/backup_rules.xml"
+    },
+    {
+        "merged": "com.kunk.singbox.app-debug-53:/xml_data_extraction_rules.xml.flat",
+        "source": "com.kunk.singbox.app-main-55:/xml/data_extraction_rules.xml"
+    },
+    {
+        "merged": "com.kunk.singbox.app-debug-53:/mipmap-anydpi-v26_ic_launcher.xml.flat",
+        "source": "com.kunk.singbox.app-main-55:/mipmap-anydpi-v26/ic_launcher.xml"
+    },
+    {
+        "merged": "com.kunk.singbox.app-debug-53:/drawable_ic_launcher_background.xml.flat",
+        "source": "com.kunk.singbox.app-main-55:/drawable/ic_launcher_background.xml"
+    },
+    {
+        "merged": "com.kunk.singbox.app-debug-53:/drawable_ic_launcher_foreground.xml.flat",
+        "source": "com.kunk.singbox.app-main-55:/drawable/ic_launcher_foreground.xml"
+    }
+]

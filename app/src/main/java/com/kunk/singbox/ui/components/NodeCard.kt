@@ -85,7 +85,6 @@ fun NodeCard(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.weight(1f)
             ) {
-                // Status Indicator
                 if (isSelected) {
                     Icon(
                         imageVector = Icons.Rounded.Check,
@@ -119,9 +118,7 @@ fun NodeCard(
                         
                         Spacer(modifier = Modifier.width(8.dp))
                         
-                        // Latency display area
                         Box {
-                            // Loading indicator
                             androidx.compose.animation.AnimatedVisibility(
                                 visible = isTesting,
                                 enter = fadeIn(),
@@ -134,7 +131,6 @@ fun NodeCard(
                                 )
                             }
 
-                            // Latency text
                             androidx.compose.animation.AnimatedVisibility(
                                 visible = !isTesting && latency != null,
                                 enter = fadeIn(),
@@ -143,8 +139,8 @@ fun NodeCard(
                                 if (latency != null) {
                                     val latencyColor = when {
                                         latency < 0 -> Color.Red
-                                        latency < 200 -> Color(0xFF4CAF50) // Green
-                                        latency < 500 -> Color(0xFFFFC107) // Amber
+                                        latency < 200 -> Color(0xFF4CAF50)
+                                        latency < 500 -> Color(0xFFFFC107)
                                         else -> Color.Red
                                     }
                                     
@@ -227,4 +223,5 @@ fun NodeCard(
                 }
             }
         }
+    }
 }

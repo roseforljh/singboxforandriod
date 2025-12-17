@@ -84,28 +84,10 @@ val CHINA_DEFAULT_RULE_SETS = listOf(
         outboundMode = RuleSetOutboundMode.DIRECT
     ),
     DefaultRuleSetConfig(
-        tag = "geosite-apple-cn",
-        description = "苹果中国服务直连",
-        url = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-apple-cn.srs",
-        outboundMode = RuleSetOutboundMode.DIRECT
-    ),
-    DefaultRuleSetConfig(
-        tag = "geosite-google-cn",
-        description = "谷歌中国服务直连",
-        url = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-google-cn.srs",
-        outboundMode = RuleSetOutboundMode.DIRECT
-    ),
-    DefaultRuleSetConfig(
-        tag = "geosite-tld-cn",
-        description = ".cn顶级域名直连",
-        url = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-tld-cn.srs",
-        outboundMode = RuleSetOutboundMode.DIRECT
-    ),
-    DefaultRuleSetConfig(
-        tag = "geosite-bilibili",
-        description = "B站直连",
-        url = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-bilibili.srs",
-        outboundMode = RuleSetOutboundMode.DIRECT
+        tag = "geosite-apple",
+        description = "苹果服务走代理",
+        url = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-apple.srs",
+        outboundMode = RuleSetOutboundMode.PROXY
     ),
     DefaultRuleSetConfig(
         tag = "geosite-youtube",
@@ -126,12 +108,6 @@ val CHINA_DEFAULT_RULE_SETS = listOf(
         outboundMode = RuleSetOutboundMode.PROXY
     ),
     DefaultRuleSetConfig(
-        tag = "geosite-twitter",
-        description = "Twitter/X走代理",
-        url = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-twitter.srs",
-        outboundMode = RuleSetOutboundMode.PROXY
-    ),
-    DefaultRuleSetConfig(
         tag = "geosite-facebook",
         description = "Facebook走代理",
         url = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-facebook.srs",
@@ -141,6 +117,12 @@ val CHINA_DEFAULT_RULE_SETS = listOf(
         tag = "geosite-openai",
         description = "OpenAI/ChatGPT走代理",
         url = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-openai.srs",
+        outboundMode = RuleSetOutboundMode.PROXY
+    ),
+    DefaultRuleSetConfig(
+        tag = "geosite-github",
+        description = "GitHub走代理",
+        url = "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-github.srs",
         outboundMode = RuleSetOutboundMode.PROXY
     )
 )

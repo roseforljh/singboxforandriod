@@ -18,6 +18,8 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        resConfigs("zh", "en") // 仅保留中文和英文资源，减少体积
         
         // 支持的 CPU 架构
         ndk {
@@ -27,13 +29,28 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
         }
+        debug {
+            // 在 debug 模式下也可以开启简单的分包优化，或者减小 ABI 范围
+            // 如果仅用于本地调试，建议在 local.properties 中配置仅编译当前设备的架构
+        }
     }
+    
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+            isUniversalApk = true
+        }
+    }
+    
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8

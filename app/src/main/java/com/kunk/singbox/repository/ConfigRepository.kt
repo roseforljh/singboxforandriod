@@ -1690,7 +1690,7 @@ class ConfigRepository(private val context: Context) {
         val allRules = listOf(
             // DNS 流量走 dns-out
             RouteRule(protocol = listOf("dns"), outbound = "dns-out")
-        ) + adBlockRules + customRuleSetRules + appRoutingRules
+        ) + appRoutingRules + adBlockRules + customRuleSetRules
         
         // 记录所有生成的路由规则
         Log.d(TAG, "=== Generated Route Rules (${allRules.size} total) ===")

@@ -3,6 +3,7 @@ package com.kunk.singbox.service
 import android.content.Intent
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
+import com.kunk.singbox.R
 import com.kunk.singbox.repository.ConfigRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -62,7 +63,12 @@ class VpnTileService : TileService() {
         val tile = qsTile ?: return
         val isRunning = SingBoxService.isRunning
         tile.state = if (isRunning) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
-        tile.label = "SingBox"
+        tile.label = getString(R.string.app_name)
+        try {
+            tile.icon = android.graphics.drawable.Icon.createWithResource(this, R.mipmap.ic_launcher)
+        } catch (e: Exception) {
+            // Fallback to manifest icon if something goes wrong
+        }
         tile.updateTile()
     }
 

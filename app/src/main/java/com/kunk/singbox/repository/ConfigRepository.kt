@@ -1356,16 +1356,56 @@ class ConfigRepository(private val context: Context) {
     ): List<RouteRule> {
         val rules = mutableListOf<RouteRule>()
 
-        settings.ruleSets.filter { it.enabled }.forEach { ruleSet ->
+        // 记录所有可用的 outbound tags，用于调试
+        val availableTags = outbounds.map { it.tag }
+        Log.d(TAG, "Available outbound tags for rule matching: $availableTags")
+        
+        // 对规则集进行排序：更具体的规则应该排在前面
+        // 优先级：单节点/分组 > 代理 > 直连 > 拦截
+        // 同时，特定服务的规则（如 google, youtube）应该优先于泛化规则（如 geolocation-!cn）
+        val sortedRuleSets = settings.ruleSets.filter { it.enabled }.sortedWith(
+            compareBy(
+                // 泛化规则排后面（如 geolocation-!cn, geolocation-cn）
+                { ruleSet ->
+                    when {
+                        ruleSet.tag.contains("geolocation-!cn") -> 100
+                        ruleSet.tag.contains("geolocation-cn") -> 99
+                        ruleSet.tag.contains("!cn") -> 98
+                        else -> 0
+                    }
+                },
+                // 单节点模式的规则优先
+                { ruleSet ->
+                    when (ruleSet.outboundMode) {
+                        RuleSetOutboundMode.NODE -> 0
+                        RuleSetOutboundMode.GROUP -> 1
+                        RuleSetOutboundMode.PROXY -> 2
+                        RuleSetOutboundMode.DIRECT -> 3
+                        RuleSetOutboundMode.BLOCK -> 4
+                        RuleSetOutboundMode.PROFILE -> 2
+                        null -> 5
+                    }
+                }
+            )
+        )
+        
+        Log.d(TAG, "Sorted rule sets order: ${sortedRuleSets.map { "${it.tag}(${it.outboundMode})" }}")
+        
+        sortedRuleSets.forEach { ruleSet ->
+            Log.d(TAG, "Processing rule set: ${ruleSet.tag}, mode=${ruleSet.outboundMode}, value=${ruleSet.outboundValue}")
+            
             val outboundTag = when (ruleSet.outboundMode ?: RuleSetOutboundMode.DIRECT) {
                 RuleSetOutboundMode.DIRECT -> "direct"
                 RuleSetOutboundMode.BLOCK -> "block"
                 RuleSetOutboundMode.PROXY -> defaultProxyTag
                 RuleSetOutboundMode.NODE -> {
                     val nodeName = ruleSet.outboundValue
-                    if (!nodeName.isNullOrEmpty() && outbounds.any { it.tag == nodeName }) {
+                    val found = outbounds.any { it.tag == nodeName }
+                    Log.d(TAG, "NODE mode: nodeName='$nodeName', found=$found")
+                    if (!nodeName.isNullOrEmpty() && found) {
                         nodeName
                     } else {
+                        Log.w(TAG, "Node '$nodeName' not found in outbounds, falling back to $defaultProxyTag")
                         defaultProxyTag
                     }
                 }
@@ -1589,12 +1629,29 @@ class ConfigRepository(private val context: Context) {
         val filteredAdBlockRuleSets = adBlockRuleSet.filter { rs ->
             customRuleSets.none { it.tag == rs.tag }
         }
+        val allRules = listOf(
+            // DNS 流量走 dns-out
+            RouteRule(protocol = listOf("dns"), outbound = "dns-out")
+        ) + adBlockRules + customRuleSetRules + appRoutingRules
+        
+        // 记录所有生成的路由规则
+        Log.d(TAG, "=== Generated Route Rules (${allRules.size} total) ===")
+        allRules.forEachIndexed { index, rule ->
+            val ruleDesc = buildString {
+                rule.protocol?.let { append("protocol=$it ") }
+                rule.ruleSet?.let { append("ruleSet=$it ") }
+                rule.packageName?.let { append("pkg=$it ") }
+                rule.domain?.let { append("domain=$it ") }
+                rule.inbound?.let { append("inbound=$it ") }
+                append("-> ${rule.outbound}")
+            }
+            Log.d(TAG, "  Rule[$index]: $ruleDesc")
+        }
+        Log.d(TAG, "=== Final outbound: $selectorTag ===")
+        
         val route = RouteConfig(
             ruleSet = filteredAdBlockRuleSets + customRuleSets,
-            rules = listOf(
-                // DNS 流量走 dns-out
-                RouteRule(protocol = listOf("dns"), outbound = "dns-out")
-            ) + adBlockRules + customRuleSetRules + appRoutingRules,
+            rules = allRules,
             finalOutbound = selectorTag, // 路由指向 Selector
             autoDetectInterface = true
         )

@@ -6,8 +6,6 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,6 +20,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.navigation.compose.rememberNavController
 import com.kunk.singbox.ui.navigation.AppNavigation
 import com.kunk.singbox.ui.navigation.NAV_ANIMATION_DURATION
@@ -33,8 +32,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         // 在 super.onCreate 之前启用边到边显示
         enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT)
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
         )
         super.onCreate(savedInstanceState)
         setContent {
@@ -57,7 +56,8 @@ fun SingBoxApp() {
 
         if (isNavigating) {
             LaunchedEffect(isNavigating) {
-                delay(NAV_ANIMATION_DURATION.toLong())
+                // Add a small buffer to ensure animation is fully finished
+                delay(NAV_ANIMATION_DURATION.toLong() + 50)
                 isNavigating = false
             }
         }
@@ -82,11 +82,14 @@ fun SingBoxApp() {
                     modifier = Modifier
                         .fillMaxSize()
                         .background(Color.Transparent)
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null,
-                            onClick = { /* Consumes all clicks */ }
-                        )
+                        .pointerInput(Unit) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    event.changes.forEach { it.consume() }
+                                }
+                            }
+                        }
                 )
             }
         }

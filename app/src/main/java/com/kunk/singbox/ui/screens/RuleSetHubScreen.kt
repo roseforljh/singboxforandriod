@@ -40,39 +40,22 @@ data class HubRuleSet(
     val binaryUrl: String = ""
 )
 
+import com.kunk.singbox.viewmodel.RuleSetViewModel
+import androidx.compose.material.icons.rounded.Refresh
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RuleSetHubScreen(
     navController: NavController,
-    settingsViewModel: SettingsViewModel = viewModel()
+    settingsViewModel: SettingsViewModel = viewModel(),
+    ruleSetViewModel: RuleSetViewModel = viewModel()
 ) {
     var searchQuery by remember { mutableStateOf("") }
-    
-    // Mock data based on the screenshot
-    val ruleSets = remember {
-        listOf(
-            HubRuleSet("0x0", 1, listOf("geosite"), sourceUrl = "https://github.com/lyc8503/sing-box-rules/raw/master/rule-set-geosite/0x0.srs"),
-            HubRuleSet("115", 14, listOf("geosite"), sourceUrl = "https://github.com/lyc8503/sing-box-rules/raw/master/rule-set-geosite/115.srs"),
-            HubRuleSet("1337x", 10, listOf("geosite"), sourceUrl = "https://github.com/lyc8503/sing-box-rules/raw/master/rule-set-geosite/1337x.srs"),
-            HubRuleSet("17zuoye", 3, listOf("geosite")),
-            HubRuleSet("18comic", 51, listOf("geosite")),
-            HubRuleSet("2ch", 4, listOf("geosite")),
-            HubRuleSet("2kgames", 4, listOf("geosite")),
-            HubRuleSet("36kr", 4, listOf("geosite")),
-            HubRuleSet("4399", 55, listOf("geosite")),
-            HubRuleSet("4chan", 3, listOf("geosite")),
-            HubRuleSet("4plebs", 2, listOf("geosite")),
-            HubRuleSet("51job", 5, listOf("geosite")),
-            HubRuleSet("54647", 4, listOf("geosite")),
-            HubRuleSet("58tongcheng", 39, listOf("geosite")),
-            HubRuleSet("5ch", 2, listOf("geosite")),
-            HubRuleSet("6park", 1, listOf("geosite")),
-            HubRuleSet("7tv", 1, listOf("geosite")),
-            HubRuleSet("800best", 1, listOf("geosite"))
-        )
-    }
+    val ruleSets by ruleSetViewModel.ruleSets.collectAsState()
+    val isLoading by ruleSetViewModel.isLoading.collectAsState()
+    val error by ruleSetViewModel.error.collectAsState()
 
-    val filteredRuleSets = remember(searchQuery) {
+    val filteredRuleSets = remember(searchQuery, ruleSets) {
         if (searchQuery.isBlank()) ruleSets
         else ruleSets.filter { it.name.contains(searchQuery, ignoreCase = true) }
     }
@@ -81,10 +64,24 @@ fun RuleSetHubScreen(
         containerColor = AppBackground,
         topBar = {
             TopAppBar(
-                title = { Text("规则集中心", color = TextPrimary) },
+                title = { 
+                    Column {
+                        Text("规则集中心", color = TextPrimary)
+                        Text(
+                            text = "数量: ${filteredRuleSets.size}", 
+                            style = MaterialTheme.typography.bodySmall, 
+                            color = TextSecondary
+                        )
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = { navController.popBackStack() }) {
                         Icon(Icons.Rounded.ArrowBack, contentDescription = "返回", tint = PureWhite)
+                    }
+                },
+                actions = {
+                     IconButton(onClick = { ruleSetViewModel.fetchRuleSets() }) {
+                        Icon(Icons.Rounded.Refresh, contentDescription = "刷新", tint = PureWhite)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = AppBackground)
@@ -98,55 +95,82 @@ fun RuleSetHubScreen(
         ) {
             // Search Bar
             StandardCard(modifier = Modifier.padding(16.dp)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 8.dp)
-                ) {
-                    Icon(Icons.Rounded.Search, contentDescription = null, tint = TextSecondary)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    StyledTextField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        placeholder = "搜索规则集...",
-                        modifier = Modifier.weight(1f),
-                        label = ""
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("搜索规则集...", color = TextSecondary) },
+                    leadingIcon = { 
+                        Icon(
+                            Icons.Rounded.Search, 
+                            contentDescription = "搜索",
+                            tint = TextSecondary
+                        ) 
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(4.dp),
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedBorderColor = Color.Transparent,
+                        unfocusedBorderColor = Color.Transparent,
+                        cursorColor = TextPrimary,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary
                     )
-                }
+                )
             }
             
-            // Grid Content
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 300.dp),
-                contentPadding = PaddingValues(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                items(filteredRuleSets) { ruleSet ->
-                    HubRuleSetItem(
-                        ruleSet = ruleSet,
-                        onAddSource = {
-                            settingsViewModel.addRuleSet(
-                                RuleSet(
-                                    tag = ruleSet.name,
-                                    type = RuleSetType.REMOTE,
-                                    format = "source",
-                                    url = ruleSet.sourceUrl.ifEmpty { "https://raw.githubusercontent.com/lyc8503/sing-box-rules/master/rule-set-geosite/${ruleSet.name}.json" }
-                                )
-                            )
-                            navController.popBackStack()
-                        },
-                        onAddBinary = {
-                            settingsViewModel.addRuleSet(
-                                RuleSet(
-                                    tag = ruleSet.name,
-                                    type = RuleSetType.REMOTE,
-                                    format = "binary",
-                                    url = ruleSet.binaryUrl.ifEmpty { "https://raw.githubusercontent.com/lyc8503/sing-box-rules/master/rule-set-geosite/${ruleSet.name}.srs" }
-                                )
-                            )
-                            navController.popBackStack()
+            if (isLoading) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = TextPrimary)
+                }
+            } else if (error != null) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(text = error!!, color = MaterialTheme.colorScheme.error)
+                        Button(onClick = { ruleSetViewModel.fetchRuleSets() }) {
+                            Text("重试")
                         }
-                    )
+                    }
+                }
+            } else {
+                // Grid Content
+                LazyVerticalGrid(
+                    columns = GridCells.Adaptive(minSize = 300.dp),
+                    contentPadding = PaddingValues(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    items(filteredRuleSets) { ruleSet ->
+                        HubRuleSetItem(
+                            ruleSet = ruleSet,
+                            onAddSource = {
+                                settingsViewModel.addRuleSet(
+                                    RuleSet(
+                                        tag = ruleSet.name,
+                                        type = RuleSetType.REMOTE,
+                                        format = "source",
+                                        url = ruleSet.sourceUrl
+                                    )
+                                )
+                                navController.popBackStack()
+                            },
+                            onAddBinary = {
+                                settingsViewModel.addRuleSet(
+                                    RuleSet(
+                                        tag = ruleSet.name,
+                                        type = RuleSetType.REMOTE,
+                                        format = "binary",
+                                        url = ruleSet.binaryUrl
+                                    )
+                                )
+                                navController.popBackStack()
+                            }
+                        )
+                    }
                 }
             }
         }

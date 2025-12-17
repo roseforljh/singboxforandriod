@@ -9,7 +9,6 @@ import com.kunk.singbox.ui.screens.NodesScreen
 import com.kunk.singbox.ui.screens.ProfilesScreen
 import com.kunk.singbox.ui.screens.SettingsScreen
 // New Screens
-import com.kunk.singbox.ui.screens.ProfileWizardScreen
 import com.kunk.singbox.ui.screens.ProfileEditorScreen
 import com.kunk.singbox.ui.screens.NodeDetailScreen
 import com.kunk.singbox.ui.screens.RoutingSettingsScreen
@@ -32,7 +31,6 @@ sealed class Screen(val route: String) {
     object Settings : Screen("settings")
     
     // Details & Wizards
-    object ProfileWizard : Screen("profile_wizard")
     object ProfileEditor : Screen("profile_editor")
     object NodeDetail : Screen("node_detail/{nodeId}") {
         fun createRoute(nodeId: String) = "node_detail/$nodeId"
@@ -61,14 +59,6 @@ fun AppNavigation(navController: NavHostController) {
         composable(Screen.Settings.route) { SettingsScreen(navController) }
         
         // Sub Screens
-        composable(
-            route = Screen.ProfileWizard.route,
-            enterTransition = { androidx.compose.animation.slideInHorizontally(initialOffsetX = { 1000 }, animationSpec = androidx.compose.animation.core.tween(300)) },
-            exitTransition = { androidx.compose.animation.slideOutHorizontally(targetOffsetX = { -1000 }, animationSpec = androidx.compose.animation.core.tween(300)) },
-            popEnterTransition = { androidx.compose.animation.slideInHorizontally(initialOffsetX = { -1000 }, animationSpec = androidx.compose.animation.core.tween(300)) },
-            popExitTransition = { androidx.compose.animation.slideOutHorizontally(targetOffsetX = { 1000 }, animationSpec = androidx.compose.animation.core.tween(300)) }
-        ) { ProfileWizardScreen(navController) }
-        
         composable(
             route = Screen.ProfileEditor.route,
             enterTransition = { androidx.compose.animation.slideInHorizontally(initialOffsetX = { 1000 }, animationSpec = androidx.compose.animation.core.tween(300)) },

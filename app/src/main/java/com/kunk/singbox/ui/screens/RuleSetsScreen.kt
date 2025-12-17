@@ -562,6 +562,7 @@ fun DefaultRuleSetsDialog(
                         val modeText = when (config.outboundMode) {
                             RuleSetOutboundMode.DIRECT -> "直连"
                             RuleSetOutboundMode.BLOCK -> "拦截"
+                            RuleSetOutboundMode.PROXY -> "代理"
                             RuleSetOutboundMode.PROFILE -> "代理"
                             else -> ""
                         }
@@ -569,6 +570,7 @@ fun DefaultRuleSetsDialog(
                             color = when (config.outboundMode) {
                                 RuleSetOutboundMode.DIRECT -> Color(0xFF2E7D32)
                                 RuleSetOutboundMode.BLOCK -> Color(0xFFC62828)
+                                RuleSetOutboundMode.PROXY -> Color(0xFF1565C0)
                                 RuleSetOutboundMode.PROFILE -> Color(0xFF1565C0)
                                 else -> Color.Gray
                             }.copy(alpha = if (isExisting) 0.3f else 0.8f),

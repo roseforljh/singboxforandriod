@@ -36,6 +36,7 @@ enum class RuleSetType(val displayName: String) {
 enum class RuleSetOutboundMode(val displayName: String) {
     DIRECT("直连"),
     BLOCK("拦截"),
+    PROXY("代理"),
     NODE("单节点"),
     PROFILE("配置"),
     GROUP("节点组")

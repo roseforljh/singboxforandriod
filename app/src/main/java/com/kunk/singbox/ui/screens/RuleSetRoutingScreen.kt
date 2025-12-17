@@ -94,7 +94,7 @@ fun RuleSetRoutingScreen(
                     }
                     showTargetSelectionDialog = true
                 } else {
-                    // Direct or Block, save immediately
+                    // Direct, Block, or Proxy - save immediately
                     settingsViewModel.updateRuleSet(updatedRuleSet)
                     editingRuleSet = null
                     showOutboundModeDialog = false
@@ -241,6 +241,7 @@ fun RuleSetRoutingScreen(
                                 val outboundText = when (currentMode) {
                                     RuleSetOutboundMode.DIRECT -> "直连"
                                     RuleSetOutboundMode.BLOCK -> "拦截"
+                                    RuleSetOutboundMode.PROXY -> "代理"
                                     RuleSetOutboundMode.NODE -> {
                                         val nodeName = nodes.find { it.id == ruleSet.outboundValue }?.name ?: "未知节点"
                                         "节点: $nodeName"

@@ -1360,6 +1360,7 @@ class ConfigRepository(private val context: Context) {
             val outboundTag = when (ruleSet.outboundMode ?: RuleSetOutboundMode.DIRECT) {
                 RuleSetOutboundMode.DIRECT -> "direct"
                 RuleSetOutboundMode.BLOCK -> "block"
+                RuleSetOutboundMode.PROXY -> defaultProxyTag
                 RuleSetOutboundMode.NODE -> {
                     val nodeId = ruleSet.outboundValue
                     val node = _nodes.value.find { it.id == nodeId }

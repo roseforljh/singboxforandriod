@@ -32,6 +32,41 @@ import com.kunk.singbox.ui.theme.AppBackground
 import com.kunk.singbox.ui.theme.Neutral500
 import com.kunk.singbox.ui.theme.PureWhite
 
+private val settingsSubRoutes = setOf(
+    Screen.Settings.route,
+    Screen.RoutingSettings.route,
+    Screen.DnsSettings.route,
+    Screen.TunSettings.route,
+    Screen.Diagnostics.route,
+    Screen.Logs.route,
+    Screen.ConnectionSettings.route,
+    Screen.RuleSets.route,
+    Screen.CustomRules.route,
+    Screen.AppRules.route,
+    Screen.RuleSetHub.route,
+    Screen.RuleSetRouting.route
+)
+
+private val nodesSubRoutes = setOf(
+    Screen.Nodes.route,
+    Screen.NodeDetail.route
+)
+
+private val profilesSubRoutes = setOf(
+    Screen.Profiles.route,
+    Screen.ProfileEditor.route
+)
+
+private fun isRouteInTab(currentRoute: String?, screen: Screen): Boolean {
+    return when (screen) {
+        Screen.Settings -> currentRoute in settingsSubRoutes
+        Screen.Nodes -> currentRoute in nodesSubRoutes || currentRoute?.startsWith("node_detail/") == true
+        Screen.Profiles -> currentRoute in profilesSubRoutes
+        Screen.Dashboard -> currentRoute == Screen.Dashboard.route
+        else -> currentRoute == screen.route
+    }
+}
+
 @Composable
 fun AppNavBar(
     navController: NavController,
@@ -47,15 +82,14 @@ fun AppNavBar(
     NavigationBar(
         containerColor = AppBackground,
         contentColor = PureWhite,
-        modifier = Modifier.height(64.dp) // Reduced height
+        modifier = Modifier.height(64.dp)
     ) {
         val navBackStackEntry by navController.currentBackStackEntryAsState()
         val currentRoute = navBackStackEntry?.destination?.route
 
         items.forEach { screen ->
-            val isSelected = currentRoute == screen.route
+            val isSelected = isRouteInTab(currentRoute, screen)
             
-            // Animation for icon scale
             val targetScale = if (screen == Screen.Profiles) {
                 if (isSelected) 1.5f else 1.2f
             } else {
@@ -94,30 +128,22 @@ fun AppNavBar(
                             .scale(scale)
                     ) 
                 },
-                label = null, // Removed text label
+                label = null,
                 selected = isSelected,
                 onClick = {
-                    if (currentRoute != screen.route) {
-                        onNavigationStart()
-                    }
+                    onNavigationStart()
                     navController.navigate(screen.route) {
-                        // Pop up to the start destination of the graph to
-                        // avoid building up a large stack of destinations
-                        // on the back stack as users select items
                         popUpTo(navController.graph.findStartDestination().id) {
                             saveState = false
                             inclusive = false
                         }
-                        // Avoid multiple copies of the same destination when
-                        // reselecting the same item
                         launchSingleTop = true
-                        // Do not restore state - always navigate to first page
                         restoreState = false
                     }
                 },
                 colors = NavigationBarItemDefaults.colors(
                     selectedIconColor = PureWhite,
-                    indicatorColor = Color.Transparent, // No pill indicator
+                    indicatorColor = Color.Transparent,
                     unselectedIconColor = Neutral500
                 )
             )

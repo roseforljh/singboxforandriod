@@ -85,35 +85,11 @@ fun AppNavigation(navController: NavHostController) {
         navController = navController,
         startDestination = Screen.Dashboard.route
     ) {
-        // Main Tabs - with transitions to prevent touch events during animation
-        composable(
-            route = Screen.Dashboard.route,
-            enterTransition = enterTransition,
-            exitTransition = exitTransition,
-            popEnterTransition = popEnterTransition,
-            popExitTransition = popExitTransition
-        ) { DashboardScreen(navController) }
-        composable(
-            route = Screen.Nodes.route,
-            enterTransition = enterTransition,
-            exitTransition = exitTransition,
-            popEnterTransition = popEnterTransition,
-            popExitTransition = popExitTransition
-        ) { NodesScreen(navController) }
-        composable(
-            route = Screen.Profiles.route,
-            enterTransition = enterTransition,
-            exitTransition = exitTransition,
-            popEnterTransition = popEnterTransition,
-            popExitTransition = popExitTransition
-        ) { ProfilesScreen(navController) }
-        composable(
-            route = Screen.Settings.route,
-            enterTransition = enterTransition,
-            exitTransition = exitTransition,
-            popEnterTransition = popEnterTransition,
-            popExitTransition = popExitTransition
-        ) { SettingsScreen(navController) }
+        // Main Tabs
+        composable(Screen.Dashboard.route) { DashboardScreen(navController) }
+        composable(Screen.Nodes.route) { NodesScreen(navController) }
+        composable(Screen.Profiles.route) { ProfilesScreen(navController) }
+        composable(Screen.Settings.route) { SettingsScreen(navController) }
         
         // Sub Screens
         composable(

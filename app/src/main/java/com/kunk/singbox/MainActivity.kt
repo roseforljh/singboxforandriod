@@ -56,8 +56,8 @@ fun SingBoxApp() {
 
         if (isNavigating) {
             LaunchedEffect(isNavigating) {
-                // Add a larger buffer to ensure animation is fully finished and touch events cleared
-                delay(NAV_ANIMATION_DURATION.toLong() + 150)
+                // Add a small buffer to ensure animation is fully finished
+                delay(NAV_ANIMATION_DURATION.toLong() + 50)
                 isNavigating = false
             }
         }

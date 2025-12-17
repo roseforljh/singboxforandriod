@@ -89,15 +89,6 @@ fun NodesScreen(
     
     val snackbarHostState = remember { SnackbarHostState() }
     
-    // Track if this screen is active to prevent clicks during navigation
-    var isScreenActive by remember { mutableStateOf(true) }
-    val currentBackStackEntry by navController.currentBackStackEntryAsState()
-    
-    LaunchedEffect(currentBackStackEntry) {
-        val currentRoute = currentBackStackEntry?.destination?.route
-        isScreenActive = currentRoute == Screen.Nodes.route
-    }
-    
     var selectedGroupIndex by remember { mutableStateOf(0) }
     val isTesting by viewModel.isTesting.collectAsState()
     

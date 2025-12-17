@@ -17,6 +17,7 @@ import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material3.*
+import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -220,14 +221,34 @@ fun RuleSetsScreen(
                     }
                 },
                 actions = {
-                    TextButton(onClick = { showDefaultRuleSetsDialog = true }) {
-                        Text("默认规则", color = PureWhite)
-                    }
                     IconButton(onClick = { navController.navigate(Screen.RuleSetHub.route) }) {
                         Icon(Icons.Rounded.CloudDownload, contentDescription = "导入", tint = PureWhite)
                     }
-                    IconButton(onClick = { showAddDialog = true }) {
-                        Icon(Icons.Rounded.Add, contentDescription = "添加", tint = PureWhite)
+                    Box {
+                        var showAddMenu by remember { mutableStateOf(false) }
+                        IconButton(onClick = { showAddMenu = true }) {
+                            Icon(Icons.Rounded.Add, contentDescription = "添加", tint = PureWhite)
+                        }
+                        DropdownMenu(
+                            expanded = showAddMenu,
+                            onDismissRequest = { showAddMenu = false },
+                            containerColor = Neutral700
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("添加规则集", color = TextPrimary) },
+                                onClick = {
+                                    showAddMenu = false
+                                    showAddDialog = true
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("默认规则", color = TextPrimary) },
+                                onClick = {
+                                    showAddMenu = false
+                                    showDefaultRuleSetsDialog = true
+                                }
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = AppBackground)

@@ -1,5 +1,7 @@
 package com.kunk.singbox
 
+import android.app.ActivityManager
+import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -23,8 +25,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableBooleanStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -81,10 +81,18 @@ fun SingBoxApp() {
         }
     }
 
-        SingBoxTheme {
+    // 在最近任务中隐藏逻辑
+    LaunchedEffect(settings?.excludeFromRecent) {
+        val am = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+        am?.appTasks?.forEach { 
+            it.setExcludeFromRecents(settings?.excludeFromRecent == true)
+        }
+    }
+
+    SingBoxTheme {
         val navController = rememberNavController()
-        var isNavigating by remember { mutableBooleanStateOf(false) }
-        var navigationStartTime by remember { mutableLongStateOf(0L) }
+        var isNavigating by remember { mutableStateOf(false) }
+        var navigationStartTime by remember { mutableStateOf(0L) }
 
         // Reset isNavigating after animation completes
         LaunchedEffect(navigationStartTime) {

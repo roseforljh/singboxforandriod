@@ -38,6 +38,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { repository.setAutoReconnect(value) }
     }
     
+    fun setExcludeFromRecent(value: Boolean) {
+        viewModelScope.launch { repository.setExcludeFromRecent(value) }
+    }
+    
     // TUN/VPN 设置
     fun setTunEnabled(value: Boolean) {
         viewModelScope.launch { repository.setTunEnabled(value) }

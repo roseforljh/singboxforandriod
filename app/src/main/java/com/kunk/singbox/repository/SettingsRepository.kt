@@ -33,6 +33,7 @@ class SettingsRepository(private val context: Context) {
         // 通用设置
         val AUTO_CONNECT = booleanPreferencesKey("auto_connect")
         val AUTO_RECONNECT = booleanPreferencesKey("auto_reconnect")
+        val EXCLUDE_FROM_RECENT = booleanPreferencesKey("exclude_from_recent")
         
         // TUN/VPN 设置
         val TUN_ENABLED = booleanPreferencesKey("tun_enabled")
@@ -112,6 +113,7 @@ class SettingsRepository(private val context: Context) {
             // 通用设置
             autoConnect = preferences[PreferencesKeys.AUTO_CONNECT] ?: false,
             autoReconnect = preferences[PreferencesKeys.AUTO_RECONNECT] ?: true,
+            excludeFromRecent = preferences[PreferencesKeys.EXCLUDE_FROM_RECENT] ?: false,
             
             // TUN/VPN 设置
             tunEnabled = preferences[PreferencesKeys.TUN_ENABLED] ?: true,
@@ -150,6 +152,10 @@ class SettingsRepository(private val context: Context) {
     
     suspend fun setAutoReconnect(value: Boolean) {
         context.dataStore.edit { it[PreferencesKeys.AUTO_RECONNECT] = value }
+    }
+    
+    suspend fun setExcludeFromRecent(value: Boolean) {
+        context.dataStore.edit { it[PreferencesKeys.EXCLUDE_FROM_RECENT] = value }
     }
     
     // TUN/VPN 设置

@@ -73,6 +73,12 @@ fun ConnectionSettingsScreen(
                     checked = settings.autoReconnect,
                     onCheckedChange = { settingsViewModel.setAutoReconnect(it) }
                 )
+                SettingSwitchItem(
+                    title = "在最近任务中隐藏",
+                    subtitle = "开启后，应用将不会出现在手机的最近任务列表中",
+                    checked = settings.excludeFromRecent,
+                    onCheckedChange = { settingsViewModel.setExcludeFromRecent(it) }
+                )
             }
             
             Spacer(modifier = Modifier.height(32.dp))

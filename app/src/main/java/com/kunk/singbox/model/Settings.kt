@@ -7,6 +7,7 @@ data class AppSettings(
     // 通用设置
     val autoConnect: Boolean = false,
     val autoReconnect: Boolean = true,
+    val excludeFromRecent: Boolean = false,
     
     // TUN/VPN 设置
     val tunEnabled: Boolean = true,

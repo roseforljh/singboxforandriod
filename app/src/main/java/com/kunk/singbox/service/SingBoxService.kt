@@ -31,6 +31,7 @@ class SingBoxService : VpnService() {
         
         const val ACTION_START = "com.kunk.singbox.START"
         const val ACTION_STOP = "com.kunk.singbox.STOP"
+        const val ACTION_SWITCH_NODE = "com.kunk.singbox.SWITCH_NODE"
         const val EXTRA_CONFIG_PATH = "config_path"
         
         // Clash API 配置
@@ -39,6 +40,10 @@ class SingBoxService : VpnService() {
         
         @Volatile
         var isRunning = false
+            private set
+
+        @Volatile
+        var isStarting = false
             private set
         
         @Volatile
@@ -299,14 +304,38 @@ class SingBoxService : VpnService() {
             ACTION_STOP -> {
                 stopVpn()
             }
+            ACTION_SWITCH_NODE -> {
+                switchNextNode()
+            }
         }
         return START_STICKY
     }
     
+    private fun switchNextNode() {
+        serviceScope.launch {
+            val configRepository = ConfigRepository.getInstance(this@SingBoxService)
+            val nodes = configRepository.nodes.value
+            if (nodes.isEmpty()) return@launch
+            
+            val activeNodeId = configRepository.activeNodeId.value
+            val currentIndex = nodes.indexOfFirst { it.id == activeNodeId }
+            val nextIndex = (currentIndex + 1) % nodes.size
+            val nextNode = nodes[nextIndex]
+            
+            val success = configRepository.setActiveNode(nextNode.id)
+            if (success) {
+                updateNotification()
+            }
+        }
+    }
+    
     private fun startVpn(configPath: String) {
-        if (isRunning) {
-            Log.w(TAG, "VPN already running")
-            return
+        synchronized(this) {
+            if (isRunning || isStarting) {
+                Log.w(TAG, "VPN already running or starting")
+                return
+            }
+            isStarting = true
         }
         
         lastConfigPath = configPath
@@ -358,6 +387,8 @@ class SingBoxService : VpnService() {
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start VPN", e)
                 withContext(Dispatchers.Main) { stopVpn() }
+            } finally {
+                isStarting = false
             }
         }
     }
@@ -395,6 +426,11 @@ class SingBoxService : VpnService() {
         }
     }
     
+    private fun updateNotification() {
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.notify(NOTIFICATION_ID, createNotification())
+    }
+
     private fun createNotification(): Notification {
         val intent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
@@ -402,6 +438,18 @@ class SingBoxService : VpnService() {
             PendingIntent.FLAG_IMMUTABLE
         )
         
+        val switchIntent = Intent(this, SingBoxService::class.java).apply {
+            action = ACTION_SWITCH_NODE
+        }
+        val switchPendingIntent = PendingIntent.getService(
+            this, 1, switchIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        
+        val configRepository = ConfigRepository.getInstance(this)
+        val activeNodeId = configRepository.activeNodeId.value
+        val activeNodeName = configRepository.nodes.value.find { it.id == activeNodeId }?.name ?: "已连接"
+
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, CHANNEL_ID)
         } else {
@@ -409,10 +457,19 @@ class SingBoxService : VpnService() {
             Notification.Builder(this)
         }.apply {
             setContentTitle("SingBox VPN")
-            setContentText("VPN 正在运行")
+            setContentText("当前节点: $activeNodeName")
             setSmallIcon(android.R.drawable.ic_lock_lock)
             setContentIntent(pendingIntent)
             setOngoing(true)
+            
+            // 添加切换节点按钮
+            addAction(
+                Notification.Action.Builder(
+                    android.R.drawable.ic_menu_revert,
+                    "切换节点",
+                    switchPendingIntent
+                ).build()
+            )
         }.build()
     }
     

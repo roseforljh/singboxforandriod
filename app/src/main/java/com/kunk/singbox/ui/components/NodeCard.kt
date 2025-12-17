@@ -85,147 +85,146 @@ fun NodeCard(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.weight(1f)
             ) {
-            // Status Indicator
-            if (isSelected) {
-                Icon(
-                    imageVector = Icons.Rounded.Check,
-                    contentDescription = "Selected",
-                    tint = AppBackground,
-                    modifier = Modifier
-                        .size(24.dp)
-                        .background(PureWhite, CircleShape)
-                        .padding(4.dp)
-                )
-            } else {
-                Spacer(modifier = Modifier.size(24.dp))
-            }
-            
-            Spacer(modifier = Modifier.width(16.dp))
-            
-            Column {
-                Text(
-                    text = name,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = TextPrimary
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = type,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = TextSecondary
+                // Status Indicator
+                if (isSelected) {
+                    Icon(
+                        imageVector = Icons.Rounded.Check,
+                        contentDescription = "Selected",
+                        tint = AppBackground,
+                        modifier = Modifier
+                            .size(24.dp)
+                            .background(PureWhite, CircleShape)
+                            .padding(4.dp)
                     )
-                    
-                    Spacer(modifier = Modifier.width(8.dp))
-                    
-                    // Latency display area
-                    Box {
-                        // Loading indicator
-                        androidx.compose.animation.AnimatedVisibility(
-                            visible = isTesting,
-                            enter = fadeIn(),
-                            exit = fadeOut()
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(14.dp),
-                                color = PureWhite,
-                                strokeWidth = 2.dp
-                            )
-                        }
-
-                        // Latency text
-                        androidx.compose.animation.AnimatedVisibility(
-                            visible = !isTesting && latency != null,
-                            enter = fadeIn(),
-                            exit = fadeOut()
-                        ) {
-                            if (latency != null) {
-                                val latencyColor = when {
-                                    latency < 0 -> Color.Red
-                                    latency < 200 -> Color(0xFF4CAF50) // Green
-                                    latency < 500 -> Color(0xFFFFC107) // Amber
-                                    else -> Color.Red
-                                }
-                                
-                                Text(
-                                    text = if (latency < 0) "Timeout" else "${latency}ms",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = latencyColor,
-                                    fontWeight = FontWeight.Bold
+                } else {
+                    Spacer(modifier = Modifier.size(24.dp))
+                }
+                
+                Spacer(modifier = Modifier.width(16.dp))
+                
+                Column {
+                    Text(
+                        text = name,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = TextPrimary
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = type,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextSecondary
+                        )
+                        
+                        Spacer(modifier = Modifier.width(8.dp))
+                        
+                        // Latency display area
+                        Box {
+                            // Loading indicator
+                            androidx.compose.animation.AnimatedVisibility(
+                                visible = isTesting,
+                                enter = fadeIn(),
+                                exit = fadeOut()
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    color = PureWhite,
+                                    strokeWidth = 2.dp
                                 )
+                            }
+
+                            // Latency text
+                            androidx.compose.animation.AnimatedVisibility(
+                                visible = !isTesting && latency != null,
+                                enter = fadeIn(),
+                                exit = fadeOut()
+                            ) {
+                                if (latency != null) {
+                                    val latencyColor = when {
+                                        latency < 0 -> Color.Red
+                                        latency < 200 -> Color(0xFF4CAF50) // Green
+                                        latency < 500 -> Color(0xFFFFC107) // Amber
+                                        else -> Color.Red
+                                    }
+                                    
+                                    Text(
+                                        text = if (latency < 0) "Timeout" else "${latency}ms",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = latencyColor,
+                                        fontWeight = FontWeight.Bold
+                                    )
                                 }
                             }
                         }
                     }
                 }
             }
-            }
 
-            Box(modifier = Modifier.wrapContentSize(Alignment.TopStart)) {
+            Box(modifier = Modifier.wrapContentSize(Alignment.TopEnd)) {
                 IconButton(onClick = { showMenu = true }) {
-                Icon(
-                    imageVector = Icons.Rounded.MoreVert,
-                    contentDescription = "More",
-                    tint = TextSecondary
-                )
-            }
-            MaterialTheme(
-                shapes = MaterialTheme.shapes.copy(extraSmall = RoundedCornerShape(12.dp))
-            ) {
-                androidx.compose.material3.DropdownMenu(
-                    expanded = showMenu,
-                    onDismissRequest = { showMenu = false },
-                    modifier = Modifier
-                        .background(Neutral700)
-                        .width(100.dp)
+                    Icon(
+                        imageVector = Icons.Rounded.MoreVert,
+                        contentDescription = "More",
+                        tint = TextSecondary
+                    )
+                }
+                MaterialTheme(
+                    shapes = MaterialTheme.shapes.copy(extraSmall = RoundedCornerShape(12.dp))
                 ) {
-                    androidx.compose.material3.DropdownMenuItem(
-                        text = {
-                            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                                Text("编辑", color = PureWhite)
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false },
+                        modifier = Modifier
+                            .background(Neutral700)
+                            .width(100.dp)
+                    ) {
+                        DropdownMenuItem(
+                            text = {
+                                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                    Text("编辑", color = PureWhite)
+                                }
+                            },
+                            onClick = {
+                                showMenu = false
+                                onEdit()
                             }
-                        },
-                        onClick = {
-                            showMenu = false
-                            onEdit()
-                        }
-                    )
-                    androidx.compose.material3.DropdownMenuItem(
-                        text = {
-                            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                                Text("导出", color = PureWhite)
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                    Text("导出", color = PureWhite)
+                                }
+                            },
+                            onClick = {
+                                showMenu = false
+                                onExport()
                             }
-                        },
-                        onClick = {
-                            showMenu = false
-                            onExport()
-                        }
-                    )
-                    androidx.compose.material3.DropdownMenuItem(
-                        text = {
-                            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                                Text("延迟", color = PureWhite)
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                    Text("延迟", color = PureWhite)
+                                }
+                            },
+                            onClick = {
+                                showMenu = false
+                                onLatency()
                             }
-                        },
-                        onClick = {
-                            showMenu = false
-                            onLatency()
-                        }
-                    )
-                    androidx.compose.material3.DropdownMenuItem(
-                        text = {
-                            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                                Text("删除", color = PureWhite)
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                    Text("删除", color = PureWhite)
+                                }
+                            },
+                            onClick = {
+                                showMenu = false
+                                onDelete()
                             }
-                        },
-                        onClick = {
-                            showMenu = false
-                            onDelete()
-                        }
-                    )
+                        )
+                    }
                 }
             }
         }
-    }
 }

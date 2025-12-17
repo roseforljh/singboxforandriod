@@ -78,6 +78,7 @@ data class Outbound(
     @SerializedName("url") val url: String? = null,
     @SerializedName("interval") val interval: String? = null,
     @SerializedName("tolerance") val tolerance: Int? = null,
+    @SerializedName("interrupt_exist_connections") val interruptExistConnections: Boolean? = null,
     
     // Shadowsocks
     @SerializedName("method") val method: String? = null,

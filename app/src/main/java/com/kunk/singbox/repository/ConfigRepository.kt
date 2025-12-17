@@ -1552,7 +1552,8 @@ class ConfigRepository(private val context: Context) {
             type = "selector",
             tag = selectorTag,
             outbounds = proxyTags,
-            default = activeNode?.name // 设置默认选中项
+            default = activeNode?.name, // 设置默认选中项
+            interruptExistConnections = true // 切换节点时断开现有连接，确保立即生效
         )
         
         // 将 Selector 添加到 outbounds 列表的最前面（或者合适的位置）

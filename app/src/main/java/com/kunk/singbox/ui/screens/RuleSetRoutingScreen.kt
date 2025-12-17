@@ -57,10 +57,11 @@ fun RuleSetRoutingScreen(
 
     if (showOutboundModeDialog && editingRuleSet != null) {
         val options = RuleSetOutboundMode.entries.map { it.displayName }
+        val currentMode = editingRuleSet!!.outboundMode ?: RuleSetOutboundMode.DIRECT
         SingleSelectDialog(
             title = "选择出站模式",
             options = options,
-            selectedIndex = RuleSetOutboundMode.entries.indexOf(editingRuleSet!!.outboundMode),
+            selectedIndex = RuleSetOutboundMode.entries.indexOf(currentMode),
             onSelect = { index ->
                 val selectedMode = RuleSetOutboundMode.entries[index]
                 val updatedRuleSet = editingRuleSet!!.copy(outboundMode = selectedMode, outboundValue = null)
@@ -138,7 +139,7 @@ fun RuleSetRoutingScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable {
-                                    val currentInbounds = editingRuleSet!!.inbounds.toMutableList()
+                                    val currentInbounds = (editingRuleSet!!.inbounds ?: emptyList()).toMutableList()
                                     if (currentInbounds.contains(inbound)) {
                                         currentInbounds.remove(inbound)
                                     } else {
@@ -150,7 +151,7 @@ fun RuleSetRoutingScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Checkbox(
-                                checked = editingRuleSet!!.inbounds.contains(inbound),
+                                checked = (editingRuleSet!!.inbounds ?: emptyList()).contains(inbound),
                                 onCheckedChange = null // Handled by Row click
                             )
                             Spacer(modifier = Modifier.width(8.dp))
@@ -233,7 +234,8 @@ fun RuleSetRoutingScreen(
                         ) {
                             Text("出站", color = TextSecondary)
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                val outboundText = when (ruleSet.outboundMode) {
+                                val currentMode = ruleSet.outboundMode ?: RuleSetOutboundMode.DIRECT
+                                val outboundText = when (currentMode) {
                                     RuleSetOutboundMode.DIRECT -> "直连"
                                     RuleSetOutboundMode.BLOCK -> "拦截"
                                     RuleSetOutboundMode.NODE -> {
@@ -265,7 +267,8 @@ fun RuleSetRoutingScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text("入站", color = TextSecondary)
-                            val inboundsText = if (ruleSet.inbounds.isEmpty()) "所有" else ruleSet.inbounds.joinToString(", ")
+                            val currentInbounds = ruleSet.inbounds ?: emptyList()
+                            val inboundsText = if (currentInbounds.isEmpty()) "所有" else currentInbounds.joinToString(", ")
                             Text(inboundsText, color = TextPrimary)
                         }
                     }

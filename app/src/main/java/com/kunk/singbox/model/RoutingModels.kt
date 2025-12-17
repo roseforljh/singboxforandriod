@@ -49,9 +49,9 @@ data class RuleSet(
     val url: String = "", // For remote
     val path: String = "", // For local
     val enabled: Boolean = true,
-    val outboundMode: RuleSetOutboundMode = RuleSetOutboundMode.DIRECT,
+    val outboundMode: RuleSetOutboundMode? = RuleSetOutboundMode.DIRECT,
     val outboundValue: String? = null, // ID for Node/Profile, or Name for Group
-    val inbounds: List<String> = emptyList() // List of inbound tags
+    val inbounds: List<String>? = emptyList() // List of inbound tags
 )
 
 /**

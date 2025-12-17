@@ -53,6 +53,10 @@ class SingBoxService : VpnService() {
         @Volatile
         var isStarting = false
             private set
+
+        @Volatile
+        var isManuallyStopped = false
+            private set
         
         @Volatile
         var clashApiPort = CLASH_API_PORT
@@ -272,7 +276,7 @@ class SingBoxService : VpnService() {
             // Auto Reconnect 逻辑：当网络可用且开启了自动重连，如果当前未运行但有上次的配置，则尝试重连
             serviceScope.launch {
                 val settings = SettingsRepository.getInstance(this@SingBoxService).settings.first()
-                if (settings.autoReconnect && !isRunning && lastConfigPath != null) {
+                if (settings.autoReconnect && !isRunning && !isManuallyStopped && lastConfigPath != null) {
                     Log.d(TAG, "Auto-reconnecting on network available: $interfaceName")
                     startVpn(lastConfigPath!!)
                 }
@@ -304,12 +308,14 @@ class SingBoxService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
+                isManuallyStopped = false
                 val configPath = intent.getStringExtra(EXTRA_CONFIG_PATH)
                 if (configPath != null) {
                     startVpn(configPath)
                 }
             }
             ACTION_STOP -> {
+                isManuallyStopped = true
                 stopVpn()
             }
             ACTION_SWITCH_NODE -> {

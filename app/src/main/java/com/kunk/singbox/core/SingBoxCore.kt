@@ -167,18 +167,24 @@ class SingBoxCore private constructor(private val context: Context) {
         try {
             if (!SingBoxService.isRunning) {
                 Log.i(TAG, "VPN not running, starting temporary service for real latency test")
-                startTestService(outbounds)
-                serviceStartedByMe = true
-                // 等待服务完全启动和 API 就绪
-                // 简单的延时，实际应该轮询 API 直到成功
-                var retry = 0
-                while (retry < 10) {
-                    delay(500)
-                    if (clashApiClient.isAvailable()) break
-                    retry++
-                }
-                if (retry >= 10) {
-                    Log.e(TAG, "Temporary service API failed to start")
+                try {
+                    startTestService(outbounds)
+                    serviceStartedByMe = true
+                    // 等待服务完全启动和 API 就绪
+                    // 简单的延时，实际应该轮询 API 直到成功
+                    var retry = 0
+                    while (retry < 10) {
+                        delay(500)
+                        if (clashApiClient.isAvailable()) break
+                        retry++
+                    }
+                    if (retry >= 10) {
+                        Log.e(TAG, "Temporary service API failed to start")
+                        outbounds.forEach { onResult(it.tag, -1L) }
+                        return@withContext
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to start temporary test service", e)
                     outbounds.forEach { onResult(it.tag, -1L) }
                     return@withContext
                 }
@@ -209,6 +215,17 @@ class SingBoxCore private constructor(private val context: Context) {
         Log.d(TAG, "Batch test config: $configJson")
         
         try {
+            val setupOptions = SetupOptions().apply {
+                basePath = context.filesDir.absolutePath
+                workingPath = workDir.absolutePath
+                this.tempPath = tempDir.absolutePath
+            }
+            try {
+                Libbox.setup(setupOptions)
+            } catch (e: Exception) {
+                Log.w(TAG, "Libbox setup warning: ${e.message}")
+            }
+
             // Point ClashApiClient to the temporary service controller.
             testServiceClashBaseUrl = clashBaseUrl
             clashApiClient.setBaseUrl(clashBaseUrl)
@@ -219,8 +236,8 @@ class SingBoxCore private constructor(private val context: Context) {
             testService?.start()
             Log.d(TAG, "Temporary test service started")
         } catch (e: Exception) {
-            testServiceClashBaseUrl = null
             Log.e(TAG, "Failed to start temporary test service", e)
+            stopTestService()
             throw e
         }
     }
@@ -230,11 +247,12 @@ class SingBoxCore private constructor(private val context: Context) {
         val oldTestBaseUrl = testServiceClashBaseUrl
         testService = null
         testServiceClashBaseUrl = null
-        if (serviceToClose == null) return
 
         try {
-            serviceToClose.close()
-            Log.d(TAG, "Temporary test service stopped")
+            serviceToClose?.close()
+            if (serviceToClose != null) {
+                Log.d(TAG, "Temporary test service stopped")
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Error stopping test service", e)
         } finally {
@@ -270,7 +288,9 @@ class SingBoxCore private constructor(private val context: Context) {
                           secret = ""
                       ),
                       cacheFile = com.kunk.singbox.model.CacheFileConfig(
-                          enabled = false
+                          enabled = false,
+                          path = File(tempDir, "cache_test.db").absolutePath,
+                          storeFakeip = false
                       )
                   ),
               // 不包含 inbounds，这样 libbox 不会尝试打开 TUN

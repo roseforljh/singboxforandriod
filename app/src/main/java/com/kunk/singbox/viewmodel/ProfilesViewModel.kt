@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kunk.singbox.model.ProfileUi
+import com.kunk.singbox.model.ProfileType
 import com.kunk.singbox.repository.ConfigRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -72,6 +73,42 @@ class ProfilesViewModel(application: Application) : AndroidViewModel(application
                 }
             )
             
+            result.fold(
+                onSuccess = { profile ->
+                    _importState.value = ImportState.Success(profile)
+                },
+                onFailure = { error ->
+                    _importState.value = ImportState.Error(error.message ?: "导入失败")
+                }
+            )
+        }
+    }
+
+    fun importFromContent(
+        name: String,
+        content: String,
+        profileType: ProfileType = ProfileType.Imported
+    ) {
+        if (_importState.value is ImportState.Loading) {
+            return
+        }
+        if (content.isBlank()) {
+            _importState.value = ImportState.Error("内容为空")
+            return
+        }
+
+        viewModelScope.launch {
+            _importState.value = ImportState.Loading("正在解析配置...")
+
+            val result = configRepository.importFromContent(
+                name = name,
+                content = content,
+                profileType = profileType,
+                onProgress = { progress ->
+                    _importState.value = ImportState.Loading(progress)
+                }
+            )
+
             result.fold(
                 onSuccess = { profile ->
                     _importState.value = ImportState.Success(profile)

@@ -209,14 +209,90 @@ class ConfigRepository(private val context: Context) {
             Result.failure(e)
         }
     }
+
+    suspend fun importFromContent(
+        name: String,
+        content: String,
+        profileType: ProfileType = ProfileType.Imported,
+        onProgress: (String) -> Unit = {}
+    ): Result<ProfileUi> = withContext(Dispatchers.IO) {
+        try {
+            onProgress("正在解析配置...")
+
+            val normalized = normalizeImportedContent(content)
+            val config = parseSubscriptionResponse(normalized)
+                ?: return@withContext Result.failure(Exception("无法解析配置格式"))
+
+            onProgress("正在提取节点...")
+
+            val profileId = UUID.randomUUID().toString()
+            val nodes = extractNodesFromConfig(config, profileId)
+
+            if (nodes.isEmpty()) {
+                return@withContext Result.failure(Exception("未找到有效节点"))
+            }
+
+            val configFile = File(configDir, "$profileId.json")
+            configFile.writeText(gson.toJson(config))
+
+            val profile = ProfileUi(
+                id = profileId,
+                name = name,
+                type = profileType,
+                url = null,
+                lastUpdated = System.currentTimeMillis(),
+                enabled = true,
+                updateStatus = UpdateStatus.Idle
+            )
+
+            profileConfigs[profileId] = config
+            profileNodes[profileId] = nodes
+
+            _profiles.update { it + profile }
+            saveProfiles()
+
+            if (_activeProfileId.value == null) {
+                setActiveProfile(profileId)
+            }
+
+            onProgress("导入成功，共 ${nodes.size} 个节点")
+
+            Result.success(profile)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Result.failure(e)
+        }
+    }
+
+    private fun normalizeImportedContent(content: String): String {
+        val trimmed = content.trim()
+        val lines = trimmed.lines().toMutableList()
+
+        fun isFenceLine(line: String): Boolean {
+            val t = line.trim()
+            if (t.startsWith("```")) return true
+            return t.length >= 2 && t.all { it == '`' }
+        }
+
+        if (lines.isNotEmpty() && isFenceLine(lines.first())) {
+            lines.removeAt(0)
+        }
+        if (lines.isNotEmpty() && isFenceLine(lines.last())) {
+            lines.removeAt(lines.lastIndex)
+        }
+
+        return lines.joinToString("\n").trim()
+    }
     
     /**
      * 解析订阅响应
      */
     private fun parseSubscriptionResponse(content: String): SingBoxConfig? {
+        val normalizedContent = normalizeImportedContent(content)
+
         // 1. 尝试直接解析为 sing-box JSON
         try {
-            val config = gson.fromJson(content, SingBoxConfig::class.java)
+            val config = gson.fromJson(normalizedContent, SingBoxConfig::class.java)
             if (config.outbounds != null && config.outbounds.isNotEmpty()) {
                 return config
             }
@@ -226,7 +302,7 @@ class ConfigRepository(private val context: Context) {
         
         // 2. 尝试解析为 Clash YAML
         try {
-            val config = ClashConfigParser.parse(content)
+            val config = ClashConfigParser.parse(normalizedContent)
             if (config != null && config.outbounds != null && config.outbounds.isNotEmpty()) {
                 return config
             }
@@ -236,7 +312,7 @@ class ConfigRepository(private val context: Context) {
 
         // 3. 尝试 Base64 解码后解析
         try {
-            val decoded = String(Base64.decode(content.trim(), Base64.DEFAULT))
+            val decoded = String(Base64.decode(normalizedContent.trim(), Base64.DEFAULT))
             
             // 尝试解析解码后的内容为 JSON
             try {
@@ -260,20 +336,25 @@ class ConfigRepository(private val context: Context) {
         
         // 4. 尝试解析为节点链接列表 (每行一个链接)
         try {
-            val lines = content.trim().lines().filter { it.isNotBlank() }
+            val lines = normalizedContent.trim().lines().filter { it.isNotBlank() }
             if (lines.isNotEmpty()) {
                 // 尝试 Base64 解码整体
                 val decoded = try {
-                    String(Base64.decode(content.trim(), Base64.DEFAULT))
+                    String(Base64.decode(normalizedContent.trim(), Base64.DEFAULT))
                 } catch (e: Exception) {
-                    content
+                    normalizedContent
                 }
                 
                 val decodedLines = decoded.trim().lines().filter { it.isNotBlank() }
                 val outbounds = mutableListOf<Outbound>()
                 
                 for (line in decodedLines) {
-                    val outbound = parseNodeLink(line.trim())
+                    val cleanedLine = line.trim()
+                        .removePrefix("- ")
+                        .removePrefix("• ")
+                        .trim()
+                        .trim('`', '"', '\'')
+                    val outbound = parseNodeLink(cleanedLine)
                     if (outbound != null) {
                         outbounds.add(outbound)
                     }
@@ -387,10 +468,21 @@ class ConfigRepository(private val context: Context) {
             val transport = when (json.net) {
                 "ws" -> {
                     val host = json.host ?: json.sni ?: json.add
+                    val userAgent = if (json.fp?.contains("chrome") == true) {
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+                    } else {
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0"
+                    }
+                    val headers = mutableMapOf<String, String>()
+                    if (!host.isNullOrBlank()) {
+                        headers["Host"] = host
+                    }
+                    headers["User-Agent"] = userAgent
+
                     TransportConfig(
                         type = "ws",
                         path = json.path ?: "/",
-                        headers = if (!host.isNullOrBlank()) mapOf("Host" to host) else null,
+                        headers = headers,
                         maxEarlyData = 2048,
                         earlyDataHeaderName = "Sec-WebSocket-Protocol"
                     )
@@ -449,19 +541,28 @@ class ConfigRepository(private val context: Context) {
             val alpnList = params["alpn"]?.split(",")?.filter { it.isNotBlank() }
             val fingerprint = params["fp"]
             val packetEncoding = params["packetEncoding"] ?: "xudp"
+            val transportType = params["type"] ?: "tcp"
+            val flow = params["flow"]?.takeIf { it.isNotBlank() }
+
+            val finalAlpnList = if (security == "tls" && transportType == "ws" && (alpnList == null || alpnList.isEmpty())) {
+                listOf("http/1.1")
+            } else {
+                alpnList
+            }
             
             val tlsConfig = when (security) {
                 "tls" -> TlsConfig(
                     enabled = true,
                     serverName = sni,
                     insecure = insecure,
-                    alpn = alpnList,
+                    alpn = finalAlpnList,
                     utls = fingerprint?.let { UtlsConfig(enabled = true, fingerprint = it) }
                 )
                 "reality" -> TlsConfig(
                     enabled = true,
                     serverName = sni,
                     insecure = insecure,
+                    alpn = finalAlpnList,
                     reality = RealityConfig(
                         enabled = true,
                         publicKey = params["pbk"],
@@ -472,15 +573,43 @@ class ConfigRepository(private val context: Context) {
                 else -> null
             }
             
-            val transportType = params["type"] ?: "tcp"
             val transport = when (transportType) {
                 "ws" -> {
                     val host = params["host"] ?: sni
+                    val rawWsPath = params["path"] ?: "/"
+                    
+                    // 从路径中提取 ed 参数
+                    val earlyDataSize = params["ed"]?.toIntOrNull()
+                        ?: Regex("""(?:\?|&)ed=(\d+)""")
+                            .find(rawWsPath)
+                            ?.groupValues
+                            ?.getOrNull(1)
+                            ?.toIntOrNull()
+                    val maxEarlyData = earlyDataSize ?: 2048
+                    
+                    // 从路径中移除 ed 参数，只保留纯路径
+                    val cleanPath = rawWsPath
+                        .replace(Regex("""\?ed=\d+(&|$)"""), "")
+                        .replace(Regex("""&ed=\d+"""), "")
+                        .trimEnd('?', '&')
+                        .ifEmpty { "/" }
+                    
+                    val userAgent = if (fingerprint?.contains("chrome") == true) {
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+                    } else {
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0"
+                    }
+                    val headers = mutableMapOf<String, String>()
+                    if (!host.isNullOrBlank()) {
+                        headers["Host"] = host
+                    }
+                    headers["User-Agent"] = userAgent
+
                     TransportConfig(
                         type = "ws",
-                        path = params["path"] ?: "/",
-                        headers = if (!host.isNullOrBlank()) mapOf("Host" to host) else null,
-                        maxEarlyData = 2048,
+                        path = cleanPath,
+                        headers = headers,
+                        maxEarlyData = maxEarlyData,
                         earlyDataHeaderName = "Sec-WebSocket-Protocol"
                     )
                 }
@@ -503,7 +632,7 @@ class ConfigRepository(private val context: Context) {
                 server = server,
                 serverPort = port,
                 uuid = uuid,
-                flow = params["flow"],
+                flow = flow,
                 tls = tlsConfig,
                 transport = transport,
                 packetEncoding = packetEncoding
@@ -540,10 +669,21 @@ class ConfigRepository(private val context: Context) {
             val transport = when (transportType) {
                 "ws" -> {
                     val host = params["host"] ?: sni
+                    val userAgent = if (fingerprint?.contains("chrome") == true) {
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+                    } else {
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0"
+                    }
+                    val headers = mutableMapOf<String, String>()
+                    if (!host.isNullOrBlank()) {
+                        headers["Host"] = host
+                    }
+                    headers["User-Agent"] = userAgent
+
                     TransportConfig(
                         type = "ws",
                         path = params["path"] ?: "/",
-                        headers = if (!host.isNullOrBlank()) mapOf("Host" to host) else null,
+                        headers = headers,
                         maxEarlyData = 2048,
                         earlyDataHeaderName = "Sec-WebSocket-Protocol"
                     )
@@ -829,7 +969,8 @@ class ConfigRepository(private val context: Context) {
                 
                 // 使用 SingBoxCore 进行真正的延迟测试
                 Log.d(TAG, "Testing latency for node: ${node.name} (${outbound.type})")
-                val latency = singBoxCore.testOutboundLatency(outbound)
+                val fixedOutbound = fixOutboundForRuntime(outbound)
+                val latency = singBoxCore.testOutboundLatency(fixedOutbound)
                 
                 // 更新节点延迟
                 _nodes.update { list ->
@@ -868,7 +1009,7 @@ class ConfigRepository(private val context: Context) {
         for (node in nodes) {
             val config = profileConfigs[node.sourceProfileId] ?: continue
             val outbound = config.outbounds?.find { it.tag == node.name } ?: continue
-            outbounds.add(outbound)
+            outbounds.add(fixOutboundForRuntime(outbound))
             tagToNodeId[node.name] = node.id
             tagToProfileId[node.name] = node.sourceProfileId
         }
@@ -1021,6 +1162,80 @@ class ConfigRepository(private val context: Context) {
     }
     
     /**
+     * 运行时修复 Outbound 配置
+     * 包括：修复 interval 单位、清理 flow、补充 ALPN、补充 User-Agent
+     */
+    private fun fixOutboundForRuntime(outbound: Outbound): Outbound {
+        var result = outbound
+
+        // Fix interval
+        val interval = result.interval
+        if (interval != null && !interval.contains(Regex("[a-zA-Z]"))) {
+            result = result.copy(interval = "${interval}s")
+        }
+
+        // Fix flow
+        val cleanedFlow = result.flow?.takeIf { it.isNotBlank() }
+        if (cleanedFlow != result.flow) {
+            result = result.copy(flow = cleanedFlow)
+        }
+
+        // Fix ALPN for WS
+        val tls = result.tls
+        if (result.transport?.type == "ws" && tls?.enabled == true && (tls.alpn == null || tls.alpn.isEmpty())) {
+            result = result.copy(tls = tls.copy(alpn = listOf("http/1.1")))
+        }
+
+        // Fix User-Agent and path for WS
+        val transport = result.transport
+        if (transport != null && transport.type == "ws") {
+            val headers = transport.headers?.toMutableMap() ?: mutableMapOf()
+            var needUpdate = false
+            
+            // 如果没有 Host，尝试从 SNI 或 Server 获取
+            if (!headers.containsKey("Host")) {
+                val host = transport.host?.firstOrNull()
+                    ?: result.tls?.serverName
+                    ?: result.server
+                if (!host.isNullOrBlank()) {
+                    headers["Host"] = host
+                    needUpdate = true
+                }
+            }
+            
+            // 补充 User-Agent
+            if (!headers.containsKey("User-Agent")) {
+                val fingerprint = result.tls?.utls?.fingerprint
+                val userAgent = if (fingerprint?.contains("chrome") == true) {
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+                } else {
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/115.0"
+                }
+                headers["User-Agent"] = userAgent
+                needUpdate = true
+            }
+            
+            // 清理路径中的 ed 参数
+            val rawPath = transport.path ?: "/"
+            val cleanPath = rawPath
+                .replace(Regex("""\?ed=\d+(&|$)"""), "")
+                .replace(Regex("""&ed=\d+"""), "")
+                .trimEnd('?', '&')
+                .ifEmpty { "/" }
+            val pathChanged = cleanPath != rawPath
+            
+            if (needUpdate || pathChanged) {
+                result = result.copy(transport = transport.copy(
+                    headers = headers,
+                    path = cleanPath
+                ))
+            }
+        }
+
+        return result
+    }
+
+    /**
      * 构建运行时配置
      */
     private fun buildRunConfig(baseConfig: SingBoxConfig, activeNode: NodeUi?, settings: AppSettings): SingBoxConfig {
@@ -1069,13 +1284,9 @@ class ConfigRepository(private val context: Context) {
             )
         )
         
-        // 修复 outbounds 中的 interval 字段（确保有时间单位）
+        // 修复 outbounds
         val fixedOutbounds = baseConfig.outbounds?.map { outbound ->
-            if (outbound.interval != null && !outbound.interval.contains(Regex("[a-zA-Z]"))) {
-                outbound.copy(interval = "${outbound.interval}s")
-            } else {
-                outbound
-            }
+            fixOutboundForRuntime(outbound)
         }?.toMutableList() ?: mutableListOf()
         
         // 确保必要的 outbounds 存在

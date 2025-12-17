@@ -43,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
@@ -257,14 +258,29 @@ fun Step3Import(
     onBack: () -> Unit
 ) {
     val importState by viewModel.importState.collectAsState()
+    val clipboardManager = LocalClipboardManager.current
     
     // 使用 key 来确保只执行一次导入
     // 只在 Idle 状态时触发导入，避免重复
-    LaunchedEffect(url, name) {
-        if (importState is ProfilesViewModel.ImportState.Idle && 
-            type == ImportType.Subscription && 
-            url.isNotBlank()) {
-            viewModel.importSubscription(name, url)
+    LaunchedEffect(type, url, name) {
+        if (importState is ProfilesViewModel.ImportState.Idle) {
+            when (type) {
+                ImportType.Subscription -> {
+                    if (url.isNotBlank()) {
+                        viewModel.importSubscription(name, url)
+                    }
+                }
+                ImportType.Clipboard -> {
+                    val content = clipboardManager.getText()?.text ?: ""
+                    viewModel.importFromContent(
+                        name = if (name.isBlank()) "剪贴板导入" else name,
+                        content = content
+                    )
+                }
+                else -> {
+                    // No-op
+                }
+            }
         }
     }
     
@@ -297,23 +313,46 @@ fun Step3Import(
             ) {
                 when (val state = importState) {
                     is ProfilesViewModel.ImportState.Idle -> {
-                        if (type == ImportType.Subscription && url.isNotBlank()) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(48.dp),
-                                color = PureWhite,
-                                strokeWidth = 3.dp
-                            )
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Text("准备导入...", color = TextSecondary)
-                        } else {
-                            Icon(
-                                Icons.Rounded.Error,
-                                contentDescription = null,
-                                tint = Color(0xFFFF6B6B),
-                                modifier = Modifier.size(48.dp)
-                            )
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Text("请输入有效的订阅链接", color = TextSecondary)
+                        when (type) {
+                            ImportType.Subscription -> {
+                                if (url.isNotBlank()) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(48.dp),
+                                        color = PureWhite,
+                                        strokeWidth = 3.dp
+                                    )
+                                    Spacer(modifier = Modifier.height(16.dp))
+                                    Text("准备导入...", color = TextSecondary)
+                                } else {
+                                    Icon(
+                                        Icons.Rounded.Error,
+                                        contentDescription = null,
+                                        tint = Color(0xFFFF6B6B),
+                                        modifier = Modifier.size(48.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(16.dp))
+                                    Text("请输入有效的订阅链接", color = TextSecondary)
+                                }
+                            }
+                            ImportType.Clipboard -> {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(48.dp),
+                                    color = PureWhite,
+                                    strokeWidth = 3.dp
+                                )
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Text("正在从剪贴板导入...", color = TextSecondary)
+                            }
+                            else -> {
+                                Icon(
+                                    Icons.Rounded.Error,
+                                    contentDescription = null,
+                                    tint = Color(0xFFFF6B6B),
+                                    modifier = Modifier.size(48.dp)
+                                )
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Text("暂不支持此导入方式", color = TextSecondary)
+                            }
                         }
                     }
                     is ProfilesViewModel.ImportState.Loading -> {
@@ -379,7 +418,17 @@ fun Step3Import(
                     Button(
                         onClick = {
                             viewModel.resetImportState()
-                            viewModel.importSubscription(name, url)
+                            when (type) {
+                                ImportType.Subscription -> viewModel.importSubscription(name, url)
+                                ImportType.Clipboard -> {
+                                    val content = clipboardManager.getText()?.text ?: ""
+                                    viewModel.importFromContent(
+                                        name = if (name.isBlank()) "剪贴板导入" else name,
+                                        content = content
+                                    )
+                                }
+                                else -> {}
+                            }
                         },
                         modifier = Modifier.weight(1f).height(50.dp),
                         colors = ButtonDefaults.buttonColors(

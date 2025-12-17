@@ -112,6 +112,19 @@ object ClashConfigParser {
         val wsPath = wsOpts?.get("path") as? String
         val wsEarlyDataHeaderName = wsOpts?.get("early-data-header-name") as? String
         val wsMaxEarlyData = (wsOpts?.get("max-early-data") as? Number)?.toInt()
+        val wsEarlyDataFromPath = wsPath?.let { path ->
+            Regex("""(?:\\?|&)ed=(\\d+)""")
+                .find(path)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?.toIntOrNull()
+        }
+        val finalWsMaxEarlyData = wsMaxEarlyData ?: wsEarlyDataFromPath
+        val finalWsEarlyDataHeaderName = wsEarlyDataHeaderName ?: if (finalWsMaxEarlyData != null) {
+            "Sec-WebSocket-Protocol"
+        } else {
+            null
+        }
         
         // 查找 Host (忽略大小写)
         val wsHostKey = wsHeaders?.keys?.find { it.toString().equals("host", ignoreCase = true) }
@@ -137,8 +150,8 @@ object ClashConfigParser {
                     type = "ws",
                     path = wsPath ?: "/",
                     headers = if (finalHeaders.isNotEmpty()) finalHeaders else null,
-                    earlyDataHeaderName = wsEarlyDataHeaderName,
-                    maxEarlyData = wsMaxEarlyData
+                    earlyDataHeaderName = finalWsEarlyDataHeaderName,
+                    maxEarlyData = finalWsMaxEarlyData
                 )
             }
             "grpc" -> TransportConfig(

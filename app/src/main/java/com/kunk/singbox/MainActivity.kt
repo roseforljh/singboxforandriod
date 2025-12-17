@@ -96,8 +96,8 @@ fun SingBoxApp() {
             // Global loading overlay during navigation
             AnimatedVisibility(
                 visible = isNavigating,
-                enter = fadeIn(animationSpec = tween(120)),
-                exit = fadeOut(animationSpec = tween(120))
+                enter = fadeIn(animationSpec = tween(50)),
+                exit = fadeOut(animationSpec = tween(50))
             ) {
                 Box(
                     modifier = Modifier

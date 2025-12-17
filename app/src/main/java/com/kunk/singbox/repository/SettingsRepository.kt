@@ -68,8 +68,8 @@ class SettingsRepository(private val context: Context) {
     }
     
     val settings: Flow<AppSettings> = context.dataStore.data.map { preferences ->
-        val ghProxyMirror = GhProxyMirror.fromDisplayName(preferences[PreferencesKeys.GH_PROXY_MIRROR] ?: "ghfast.top")
-        val currentMirrorUrl = ghProxyMirror.url
+        val selectedMirror = GhProxyMirror.fromDisplayName(preferences[PreferencesKeys.GH_PROXY_MIRROR] ?: "ghfast.top")
+        val currentMirrorUrl = selectedMirror.url
 
         val customRulesJson = preferences[PreferencesKeys.CUSTOM_RULES]
         val customRules = if (customRulesJson != null) {
@@ -204,7 +204,7 @@ class SettingsRepository(private val context: Context) {
             bypassLan = preferences[PreferencesKeys.BYPASS_LAN] ?: true,
             
             // 镜像设置
-            ghProxyMirror = ghProxyMirror,
+            ghProxyMirror = selectedMirror,
             
             // 高级路由
             customRules = customRules,

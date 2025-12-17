@@ -327,11 +327,8 @@ fun NodesScreen(
                     key = { it.id },
                     contentType = { "node" }
                 ) { node ->
-                    val name = remember(node.id, node.name, node.regionFlag) {
-                        "${node.regionFlag ?: ""} ${node.name}"
-                    }
                     val isSelected = activeNodeId == node.id
-                    val isTestingNode = node.id in testingNodeIds
+                    val isTestingNode = testingNodeIds.contains(node.id)
                     
                     val onNodeClick = remember(node.id) { { viewModel.setActiveNode(node.id) } }
                     val onEdit = remember(node.id) { 
@@ -348,9 +345,10 @@ fun NodesScreen(
                     val onLatency = remember(node.id) { { viewModel.testLatency(node.id) } }
                     val onDelete = remember(node.id) { { viewModel.deleteNode(node.id) } }
 
-                    NodeCard(
-                        name = name,
-                        type = node.protocol,
+                      NodeCard(
+                          name = node.displayName,
+                          type = node.protocol,
+
                         latency = node.latencyMs,
                         isSelected = isSelected,
                         isTesting = isTestingNode,

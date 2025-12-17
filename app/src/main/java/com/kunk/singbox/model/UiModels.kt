@@ -1,5 +1,8 @@
 package com.kunk.singbox.model
 
+import androidx.compose.runtime.Immutable
+
+@Immutable
 data class ProfileUi(
     val id: String,
     val name: String,
@@ -19,6 +22,7 @@ enum class UpdateStatus {
     Idle, Updating, Success, Failed
 }
 
+@Immutable
 data class NodeUi(
     val id: String,
     val name: String,
@@ -29,7 +33,10 @@ data class NodeUi(
     val isFavorite: Boolean = false,
     val sourceProfileId: String,
     val tags: List<String> = emptyList()
-)
+) {
+    val displayName: String
+        get() = if (regionFlag != null) "$regionFlag $name" else name
+}
 
 data class RuleSetUi(
     val id: String,

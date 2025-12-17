@@ -1,46 +1,22 @@
 package com.kunk.singbox.ui.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.wrapContentSize
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.kunk.singbox.ui.theme.AppBackground
-import com.kunk.singbox.ui.theme.Divider
-import com.kunk.singbox.ui.theme.Neutral700
-import com.kunk.singbox.ui.theme.PureWhite
-import com.kunk.singbox.ui.theme.SurfaceCard
-import com.kunk.singbox.ui.theme.TextPrimary
-import com.kunk.singbox.ui.theme.TextSecondary
+import com.kunk.singbox.ui.theme.*
 
 @Composable
 fun NodeCard(
@@ -58,21 +34,14 @@ fun NodeCard(
 ) {
     var showMenu by remember { mutableStateOf(false) }
 
+    val borderColor = if (isSelected) PureWhite else Divider
+    val borderWidth = if (isSelected) 2.dp else 1.dp
+
     Box(
         modifier = modifier
             .fillMaxWidth()
             .background(SurfaceCard, RoundedCornerShape(16.dp))
-            .then(
-                if (isSelected) {
-                    Modifier.androidx.compose.foundation.border(
-                        2.dp, PureWhite, RoundedCornerShape(16.dp)
-                    )
-                } else {
-                    Modifier.androidx.compose.foundation.border(
-                        1.dp, Divider, RoundedCornerShape(16.dp)
-                    )
-                }
-            )
+            .border(borderWidth, borderColor, RoundedCornerShape(16.dp))
             .clickable(onClick = onClick)
             .padding(16.dp)
     ) {
@@ -86,15 +55,20 @@ fun NodeCard(
                 modifier = Modifier.weight(1f)
             ) {
                 if (isSelected) {
-                    Icon(
-                        imageVector = Icons.Rounded.Check,
-                        contentDescription = "Selected",
-                        tint = AppBackground,
+                    Box(
                         modifier = Modifier
                             .size(24.dp)
                             .background(PureWhite, CircleShape)
-                            .padding(4.dp)
-                    )
+                            .padding(4.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Check,
+                            contentDescription = "Selected",
+                            tint = AppBackground,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
                 } else {
                     Spacer(modifier = Modifier.size(24.dp))
                 }
@@ -123,7 +97,7 @@ fun NodeCard(
                             Text(
                                 text = "Testing...",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = PureWhite,
+                                color = PureWhite.copy(alpha = 0.7f),
                                 fontWeight = FontWeight.Medium
                             )
                         } else if (latency != null) {
@@ -168,7 +142,7 @@ fun NodeCard(
                     onDismissRequest = { showMenu = false },
                     modifier = Modifier
                         .background(Neutral700)
-                        .width(100.dp)
+                        .width(120.dp)
                 ) {
                     DropdownMenuItem(
                         text = { Text("编辑", color = PureWhite) },
@@ -192,7 +166,7 @@ fun NodeCard(
                         }
                     )
                     DropdownMenuItem(
-                        text = { Text("删除", color = PureWhite) },
+                        text = { Text("删除", color = Color.Red) },
                         onClick = {
                             showMenu = false
                             onDelete()

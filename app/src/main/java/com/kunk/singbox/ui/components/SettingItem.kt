@@ -37,13 +37,14 @@ fun SettingItem(
     subtitle: String? = null,
     icon: ImageVector? = null,
     value: String? = null,
+    enabled: Boolean = true,
     onClick: (() -> Unit)? = null,
     trailing: @Composable (() -> Unit)? = null
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = onClick != null, onClick = onClick ?: {})
+            .clickable(enabled = enabled && onClick != null, onClick = onClick ?: {})
             .padding(vertical = 12.dp, horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -51,7 +52,7 @@ fun SettingItem(
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                tint = TextSecondary,
+                tint = if (enabled) TextSecondary else TextSecondary.copy(alpha = 0.5f),
                 modifier = Modifier.size(24.dp)
             )
             Spacer(modifier = Modifier.width(16.dp))
@@ -62,7 +63,7 @@ fun SettingItem(
                 text = title,
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.Medium,
-                color = TextPrimary,
+                color = if (enabled) TextPrimary else TextPrimary.copy(alpha = 0.5f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -71,7 +72,7 @@ fun SettingItem(
                 Text(
                     text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
-                    color = TextSecondary,
+                    color = if (enabled) TextSecondary else TextSecondary.copy(alpha = 0.5f),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )

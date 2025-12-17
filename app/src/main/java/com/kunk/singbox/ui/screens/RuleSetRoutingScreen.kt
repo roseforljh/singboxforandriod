@@ -224,11 +224,12 @@ fun RuleSetRoutingScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
                                 .clickable {
                                     editingRuleSet = ruleSet
                                     showOutboundModeDialog = true
                                 }
-                                .padding(vertical = 12.dp, horizontal = 4.dp), // Increase padding for better touch target
+                                .padding(vertical = 12.dp, horizontal = 8.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -258,11 +259,12 @@ fun RuleSetRoutingScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
                                 .clickable {
                                     editingRuleSet = ruleSet
                                     showInboundDialog = true
                                 }
-                                .padding(vertical = 12.dp, horizontal = 4.dp), // Increase padding for better touch target
+                                .padding(vertical = 12.dp, horizontal = 8.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {

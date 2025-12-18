@@ -9,6 +9,8 @@ import com.kunk.singbox.core.SingBoxCore
 import com.kunk.singbox.model.*
 import com.kunk.singbox.service.SingBoxService
 import com.kunk.singbox.utils.ClashConfigParser
+import com.kunk.singbox.utils.SecurityUtils
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -84,14 +86,10 @@ class ConfigRepository(private val context: Context) {
     private val _activeNodeId = MutableStateFlow<String?>(null)
     val activeNodeId: StateFlow<String?> = _activeNodeId.asStateFlow()
     
-    // 存储每个配置对应的原始配置和节点
     private val maxConfigCacheSize = 2
-    private val configCache = object : LinkedHashMap<String, SingBoxConfig>(16, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, SingBoxConfig>?): Boolean {
-            return size > maxConfigCacheSize
-        }
-    }
-    private val profileNodes = mutableMapOf<String, List<NodeUi>>()
+    private val configCache = ConcurrentHashMap<String, SingBoxConfig>()
+    private val configCacheOrder = java.util.concurrent.ConcurrentLinkedDeque<String>()
+    private val profileNodes = ConcurrentHashMap<String, List<NodeUi>>()
     
     private val configDir: File
         get() = File(context.filesDir, "configs").also { it.mkdirs() }
@@ -104,9 +102,7 @@ class ConfigRepository(private val context: Context) {
     }
     
     private fun loadConfig(profileId: String): SingBoxConfig? {
-        synchronized(configCache) {
-            configCache[profileId]?.let { return it }
-        }
+        configCache[profileId]?.let { return it }
 
         val configFile = File(configDir, "$profileId.json")
         if (!configFile.exists()) return null
@@ -114,9 +110,7 @@ class ConfigRepository(private val context: Context) {
         return try {
             val configJson = configFile.readText()
             val config = gson.fromJson(configJson, SingBoxConfig::class.java)
-            synchronized(configCache) {
-                configCache[profileId] = config
-            }
+            cacheConfig(profileId, config)
             config
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load config for profile: $profileId", e)
@@ -125,15 +119,20 @@ class ConfigRepository(private val context: Context) {
     }
 
     private fun cacheConfig(profileId: String, config: SingBoxConfig) {
-        synchronized(configCache) {
-            configCache[profileId] = config
+        configCache[profileId] = config
+        configCacheOrder.remove(profileId)
+        configCacheOrder.addLast(profileId)
+        while (configCache.size > maxConfigCacheSize && configCacheOrder.isNotEmpty()) {
+            val oldest = configCacheOrder.pollFirst()
+            if (oldest != null && oldest != profileId) {
+                configCache.remove(oldest)
+            }
         }
     }
 
     private fun removeCachedConfig(profileId: String) {
-        synchronized(configCache) {
-            configCache.remove(profileId)
-        }
+        configCache.remove(profileId)
+        configCacheOrder.remove(profileId)
     }
 
     private fun saveProfiles() {
@@ -144,7 +143,7 @@ class ConfigRepository(private val context: Context) {
             )
             profilesFile.writeText(gson.toJson(data))
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "Failed to save profiles", e)
         }
     }
     
@@ -169,7 +168,10 @@ class ConfigRepository(private val context: Context) {
             if (profilesFile.exists()) {
                 val json = profilesFile.readText()
                 val savedData = gson.fromJson(json, SavedProfilesData::class.java)
-                _profiles.value = savedData.profiles
+                // 加载时重置所有配置的更新状态为 Idle，防止因异常退出导致一直显示更新中
+                _profiles.value = savedData.profiles.map {
+                    it.copy(updateStatus = UpdateStatus.Idle)
+                }
                 _activeProfileId.value = savedData.activeProfileId
                 
                 // 加载每个配置的节点
@@ -186,14 +188,13 @@ class ConfigRepository(private val context: Context) {
                                 cacheConfig(profile.id, config)
                             }
                         } catch (e: Exception) {
-                            e.printStackTrace()
+                            Log.e(TAG, "Failed to load config for profile: ${profile.id}", e)
                         }
                     }
                 }
                 
                 updateAllNodesAndGroups()
                 
-                // 如果有活跃配置，加载其节点
                 _activeProfileId.value?.let { activeId ->
                     profileNodes[activeId]?.let { nodes ->
                         _nodes.value = nodes
@@ -205,7 +206,7 @@ class ConfigRepository(private val context: Context) {
                 }
             }
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "Failed to load saved profiles", e)
         }
     }
     
@@ -327,9 +328,18 @@ class ConfigRepository(private val context: Context) {
             onProgress("导入成功，共 ${nodes.size} 个节点")
             
             Result.success(profile)
+        } catch (e: java.net.SocketTimeoutException) {
+            Log.e(TAG, "Subscription fetch timeout", e)
+            Result.failure(Exception("订阅获取超时，请检查网络连接"))
+        } catch (e: java.net.UnknownHostException) {
+            Log.e(TAG, "DNS resolution failed", e)
+            Result.failure(Exception("域名解析失败，请检查网络或订阅地址"))
+        } catch (e: javax.net.ssl.SSLHandshakeException) {
+            Log.e(TAG, "SSL handshake failed", e)
+            Result.failure(Exception("SSL证书验证失败，请检查订阅地址"))
         } catch (e: Exception) {
-            e.printStackTrace()
-            Result.failure(e)
+            Log.e(TAG, "Subscription import failed", e)
+            Result.failure(Exception("导入失败: ${e.message ?: "未知错误"}"))
         }
     }
 
@@ -1137,49 +1147,66 @@ class ConfigRepository(private val context: Context) {
         saveProfiles()
     }
     
+    sealed class NodeSwitchResult {
+        data object Success : NodeSwitchResult()
+        data object NotRunning : NodeSwitchResult()
+        data class Failed(val reason: String) : NodeSwitchResult()
+    }
+
     suspend fun setActiveNode(nodeId: String): Boolean {
+        return setActiveNodeWithResult(nodeId) is NodeSwitchResult.Success || 
+               setActiveNodeWithResult(nodeId) is NodeSwitchResult.NotRunning
+    }
+
+    suspend fun setActiveNodeWithResult(nodeId: String): NodeSwitchResult {
         _activeNodeId.value = nodeId
         
-        // 如果 VPN 正在运行，尝试通过 API 热切换节点
-        if (com.kunk.singbox.service.SingBoxService.isRunning) {
-            return withContext(Dispatchers.IO) {
-                val node = _nodes.value.find { it.id == nodeId }
-                if (node != null) {
-                    try {
-                        val clashApi = singBoxCore.getClashApiClient()
+        if (!com.kunk.singbox.service.SingBoxService.isRunning) {
+            return NodeSwitchResult.NotRunning
+        }
+        
+        return withContext(Dispatchers.IO) {
+            val node = _nodes.value.find { it.id == nodeId }
+            if (node == null) {
+                Log.w(TAG, "Node not found: $nodeId")
+                return@withContext NodeSwitchResult.Success
+            }
+            
+            try {
+                val clashApi = singBoxCore.getClashApiClient()
 
-                        // 先获取当前选中的节点
-                        val beforeSwitch = clashApi.getCurrentSelection("PROXY")
-                        Log.v(TAG, "Before switch: current selection = $beforeSwitch, target = ${node.name}")
+                val beforeSwitch = clashApi.getCurrentSelection("PROXY")
+                Log.v(TAG, "Before switch: current selection = $beforeSwitch, target = ${node.name}")
 
-                        val success = clashApi.selectProxy("PROXY", node.name)
+                val success = clashApi.selectProxy("PROXY", node.name)
 
-                        if (success) {
-                            // 验证切换是否生效
-                            val afterSwitch = clashApi.getCurrentSelection("PROXY")
-                            Log.v(TAG, "After switch: current selection = $afterSwitch")
+                if (success) {
+                    val afterSwitch = clashApi.getCurrentSelection("PROXY")
+                    Log.v(TAG, "After switch: current selection = $afterSwitch")
 
-                            if (afterSwitch == node.name) {
-                                Log.i(TAG, "Hot switched to node: ${node.name} - VERIFIED")
-                                true
-                            } else {
-                                Log.e(TAG, "Switch verification failed! Expected: ${node.name}, Got: $afterSwitch")
-                                false
-                            }
-                        } else {
-                            Log.e(TAG, "Failed to hot switch node: ${node.name}")
-                            false
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error during hot switch", e)
-                        false
+                    if (afterSwitch == node.name) {
+                        Log.i(TAG, "Hot switched to node: ${node.name} - VERIFIED")
+                        NodeSwitchResult.Success
+                    } else {
+                        val msg = "切换验证失败，期望: ${node.name}, 实际: $afterSwitch"
+                        Log.e(TAG, msg)
+                        NodeSwitchResult.Failed(msg)
                     }
                 } else {
-                    true
+                    val msg = "节点切换请求失败"
+                    Log.e(TAG, "Failed to hot switch node: ${node.name}")
+                    NodeSwitchResult.Failed(msg)
                 }
+            } catch (e: java.net.ConnectException) {
+                val msg = "无法连接到代理服务"
+                Log.e(TAG, msg, e)
+                NodeSwitchResult.Failed(msg)
+            } catch (e: Exception) {
+                val msg = "切换异常: ${e.message ?: "未知错误"}"
+                Log.e(TAG, "Error during hot switch", e)
+                NodeSwitchResult.Failed(msg)
             }
         }
-        return true
     }
 
     suspend fun syncActiveNodeFromProxySelection(proxyName: String?): Boolean {
@@ -1315,50 +1342,51 @@ class ConfigRepository(private val context: Context) {
         val nodes = _nodes.value
         Log.v(TAG, "Starting latency test for ${nodes.size} nodes")
 
-        // 构建需要测试的 outbounds 列表，使用 singBoxCore 批量测试，避免并发启动多个临时服务导致崩溃
-        val outbounds = ArrayList<com.kunk.singbox.model.Outbound>()
-        val tagToNodeId = HashMap<String, String>()
-        val tagToProfileId = HashMap<String, String>()
+        data class NodeTestInfo(
+            val outbound: Outbound,
+            val nodeId: String,
+            val profileId: String
+        )
 
-        for (node in nodes) {
-            val config = loadConfig(node.sourceProfileId) ?: continue
-            val outbound = config.outbounds?.find { it.tag == node.name } ?: continue
-            outbounds.add(fixOutboundForRuntime(outbound))
-            tagToNodeId[node.name] = node.id
-            tagToProfileId[node.name] = node.sourceProfileId
+        val testInfoList = nodes.mapNotNull { node ->
+            val config = loadConfig(node.sourceProfileId) ?: return@mapNotNull null
+            val outbound = config.outbounds?.find { it.tag == node.name } ?: return@mapNotNull null
+            NodeTestInfo(fixOutboundForRuntime(outbound), node.id, node.sourceProfileId)
         }
 
-        // 顺序测试每个节点
-        for (outbound in outbounds) {
-            val tag = outbound.tag
-            val nodeId = tagToNodeId[tag] ?: continue
-            val profileId = tagToProfileId[tag] ?: continue
+        val parallelism = 5
+        val semaphore = kotlinx.coroutines.sync.Semaphore(parallelism)
+        val updateLock = Any()
 
-            try {
-                // 测试单个节点延迟
-                val latency = singBoxCore.testOutboundLatency(outbound)
-                
-                // 更新状态
-                _nodes.update { list ->
-                    list.map {
-                        if (it.id == nodeId) it.copy(latencyMs = if (latency > 0) latency else null) else it
+        val jobs = testInfoList.map { info ->
+            async {
+                semaphore.acquire()
+                try {
+                    val latency = singBoxCore.testOutboundLatency(info.outbound)
+                    
+                    synchronized(updateLock) {
+                        _nodes.update { list ->
+                            list.map {
+                                if (it.id == info.nodeId) it.copy(latencyMs = if (latency > 0) latency else null) else it
+                            }
+                        }
+
+                        profileNodes[info.profileId] = profileNodes[info.profileId]?.map {
+                            if (it.id == info.nodeId) it.copy(latencyMs = if (latency > 0) latency else null) else it
+                        } ?: emptyList()
+                        updateLatencyInAllNodes(info.nodeId, latency)
                     }
+
+                    Log.v(TAG, "Latency test result for ${info.outbound.tag}: ${latency}ms")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to test latency for ${info.outbound.tag}", e)
+                } finally {
+                    semaphore.release()
                 }
-
-                profileNodes[profileId] = profileNodes[profileId]?.map {
-                    if (it.id == nodeId) it.copy(latencyMs = if (latency > 0) latency else null) else it
-                } ?: emptyList()
-                updateLatencyInAllNodes(nodeId, latency)
-
-                Log.v(TAG, "Latency test result for $tag: ${latency}ms")
-                
-                // 短暂延迟以避免UI刷新过快或系统负载过高
-                kotlinx.coroutines.delay(50)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to test latency for $tag", e)
             }
         }
 
+        jobs.awaitAll()
         Log.v(TAG, "Latency test completed for all nodes")
 
         if (!SingBoxService.isRunning) {
@@ -1526,10 +1554,17 @@ class ConfigRepository(private val context: Context) {
     private fun fixOutboundForRuntime(outbound: Outbound): Outbound {
         var result = outbound
 
-        // Fix interval
         val interval = result.interval
-        if (interval != null && !interval.contains(Regex("[a-zA-Z]"))) {
-            result = result.copy(interval = "${interval}s")
+        if (interval != null) {
+            val fixedInterval = when {
+                interval.matches(Regex("^\\d+$")) -> "${interval}s"
+                interval.matches(Regex("^\\d+\\.\\d+$")) -> "${interval}s"
+                interval.matches(Regex("^\\d+[smhd]$", RegexOption.IGNORE_CASE)) -> interval.lowercase()
+                else -> interval
+            }
+            if (fixedInterval != interval) {
+                result = result.copy(interval = fixedInterval)
+            }
         }
 
         // Fix flow
@@ -1830,11 +1865,12 @@ class ConfigRepository(private val context: Context) {
 
         val singboxTempDir = File(context.cacheDir, "singbox_temp").also { it.mkdirs() }
 
-        // 添加 Clash API 配置
+        val clashApiSecret = SecurityUtils.getClashApiSecret()
+
         val experimental = ExperimentalConfig(
             clashApi = ClashApiConfig(
                 externalController = "127.0.0.1:9090",
-                secret = ""
+                secret = clashApiSecret
             ),
             cacheFile = CacheFileConfig(
                 enabled = false,
@@ -1925,12 +1961,14 @@ class ConfigRepository(private val context: Context) {
             disableCache = !settings.dnsCacheEnabled
         )
         
-        // 修复 outbounds
-        val fixedOutbounds = baseConfig.outbounds?.map { outbound ->
+        val rawOutbounds = baseConfig.outbounds
+        if (rawOutbounds.isNullOrEmpty()) {
+            Log.w(TAG, "No outbounds found in base config, adding defaults")
+        }
+        val fixedOutbounds = rawOutbounds?.map { outbound ->
             fixOutboundForRuntime(outbound)
         }?.toMutableList() ?: mutableListOf()
         
-        // 确保必要的 outbounds 存在
         if (fixedOutbounds.none { it.tag == "direct" }) {
             fixedOutbounds.add(Outbound(type = "direct", tag = "direct"))
         }

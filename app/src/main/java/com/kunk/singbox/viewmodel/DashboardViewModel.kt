@@ -443,8 +443,13 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     private fun stopTrafficMonitor() {
         trafficSmoothingJob?.cancel()
         trafficSmoothingJob = null
-        trafficWebSocket?.close(1000, "Stop monitoring")
-        trafficWebSocket = null
+        try {
+            trafficWebSocket?.close(1000, "Stop monitoring")
+        } catch (e: Exception) {
+            Log.w(TAG, "Error closing traffic WebSocket", e)
+        } finally {
+            trafficWebSocket = null
+        }
         lastUploadSpeed = 0
         lastDownloadSpeed = 0
     }

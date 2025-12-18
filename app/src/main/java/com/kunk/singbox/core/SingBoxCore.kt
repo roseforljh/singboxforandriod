@@ -271,19 +271,22 @@ class SingBoxCore private constructor(private val context: Context) {
         scheduleServiceShutdown()
     }
     
-    /**
-     * 调度服务自动关闭
-     */
+    private val keepAliveScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
     private fun scheduleServiceShutdown() {
         keepAliveJob?.cancel()
-        keepAliveJob = kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
-            delay(TEST_SERVICE_KEEP_ALIVE_MS)
-            synchronized(serviceLock) {
-                val elapsed = System.currentTimeMillis() - testServiceStartTime
-                if (elapsed >= TEST_SERVICE_KEEP_ALIVE_MS) {
-                    Log.v(TAG, "Test service keep-alive expired, stopping")
-                    stopTestServiceInternal()
+        keepAliveJob = keepAliveScope.launch {
+            try {
+                delay(TEST_SERVICE_KEEP_ALIVE_MS)
+                synchronized(serviceLock) {
+                    val elapsed = System.currentTimeMillis() - testServiceStartTime
+                    if (elapsed >= TEST_SERVICE_KEEP_ALIVE_MS) {
+                        Log.v(TAG, "Test service keep-alive expired, stopping")
+                        stopTestServiceInternal()
+                    }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                Log.v(TAG, "Keep-alive job cancelled")
             }
         }
     }
@@ -350,11 +353,11 @@ class SingBoxCore private constructor(private val context: Context) {
                           com.kunk.singbox.model.DnsServer(tag = "local", address = "223.5.5.5", detour = "direct")
                       )
                   ),
-                  experimental = com.kunk.singbox.model.ExperimentalConfig(
-                      clashApi = com.kunk.singbox.model.ClashApiConfig(
-                          externalController = "127.0.0.1:$clashPort",
-                          secret = ""
-                      ),
+              experimental = com.kunk.singbox.model.ExperimentalConfig(
+                        clashApi = com.kunk.singbox.model.ClashApiConfig(
+                            externalController = "127.0.0.1:$clashPort",
+                            secret = com.kunk.singbox.utils.SecurityUtils.getClashApiSecret()
+                        ),
                       cacheFile = com.kunk.singbox.model.CacheFileConfig(
                           enabled = false,
                           path = File(tempDir, "cache_test.db").absolutePath,

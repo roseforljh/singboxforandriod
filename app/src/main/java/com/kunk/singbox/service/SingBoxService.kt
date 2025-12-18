@@ -19,6 +19,7 @@ import android.util.Log
 import android.service.quicksettings.TileService
 import android.content.ComponentName
 import com.kunk.singbox.MainActivity
+import com.kunk.singbox.utils.SecurityUtils
 import com.kunk.singbox.core.SingBoxCore
 import com.kunk.singbox.model.AppSettings
 import com.kunk.singbox.model.VpnAppMode
@@ -61,9 +62,9 @@ class SingBoxService : VpnService() {
         const val ACTION_SWITCH_NODE = "com.kunk.singbox.SWITCH_NODE"
         const val EXTRA_CONFIG_PATH = "config_path"
         
-        // Clash API 配置
         const val CLASH_API_PORT = 9090
-        const val CLASH_API_SECRET = ""
+
+        fun getClashApiSecret(): String = SecurityUtils.getClashApiSecret()
         
         @Volatile
         var isRunning = false
@@ -442,7 +443,10 @@ class SingBoxService : VpnService() {
             networkCallback?.let {
                 try {
                     connectivityManager?.unregisterNetworkCallback(it)
-                } catch (_: Exception) {
+                } catch (e: IllegalArgumentException) {
+                    Log.v(TAG, "NetworkCallback already unregistered")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error unregistering NetworkCallback", e)
                 }
             }
             networkCallback = null

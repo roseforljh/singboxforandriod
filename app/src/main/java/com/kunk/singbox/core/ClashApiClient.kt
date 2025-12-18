@@ -20,9 +20,10 @@ import java.util.concurrent.TimeUnit
  * 用于通过 sing-box 的 Clash API 测试节点延迟
  */
 class ClashApiClient(
-    baseUrl: String = "http://127.0.0.1:9090",
-    private val secret: String = ""
+    baseUrl: String = "http://127.0.0.1:9090"
 ) {
+    private val secretProvider: () -> String = { com.kunk.singbox.utils.SecurityUtils.getClashApiSecret() }
+    private val secret: String get() = secretProvider()
     companion object {
         private const val TAG = "ClashApiClient"
         // 使用 Cloudflare 的测试 URL，比 gstatic 更快

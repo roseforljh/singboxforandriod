@@ -26,13 +26,6 @@ android {
         }
 
         resConfigs("zh", "en") // 仅保留中文和英文资源，减少体积
-        
-        // 关键：过滤 AAR 中的 native 库，只保留 arm64-v8a 架构
-        // libbox.aar 包含 4 个架构(arm64-v8a, armeabi-v7a, x86, x86_64)，每个约 10MB+
-        // 不添加此配置的话，即使配置了 splits.abi，AAR 中的所有架构仍会被打包
-        ndk {
-            abiFilters += listOf("arm64-v8a")
-        }
     }
 
     signingConfigs {

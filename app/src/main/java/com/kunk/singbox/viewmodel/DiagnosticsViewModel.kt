@@ -1,10 +1,13 @@
 package com.kunk.singbox.viewmodel
 
 import android.app.Application
+import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.google.gson.Gson
 import com.kunk.singbox.model.SingBoxConfig
 import com.kunk.singbox.repository.ConfigRepository
+import com.kunk.singbox.service.SingBoxService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -12,11 +15,16 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import java.io.File
 import java.net.InetAddress
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 class DiagnosticsViewModel(application: Application) : AndroidViewModel(application) {
 
+    private val gson = Gson()
     private val configRepository = ConfigRepository.getInstance(application)
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
@@ -44,8 +52,100 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
     private val _isRoutingLoading = MutableStateFlow(false)
     val isRoutingLoading = _isRoutingLoading.asStateFlow()
 
+    private val _isRunConfigLoading = MutableStateFlow(false)
+    val isRunConfigLoading = _isRunConfigLoading.asStateFlow()
+
+    private val _isAppRoutingDiagLoading = MutableStateFlow(false)
+    val isAppRoutingDiagLoading = _isAppRoutingDiagLoading.asStateFlow()
+
+    private val _isConnOwnerStatsLoading = MutableStateFlow(false)
+    val isConnOwnerStatsLoading = _isConnOwnerStatsLoading.asStateFlow()
+
     fun dismissDialog() {
         _showResultDialog.value = false
+    }
+
+    fun showRunningConfigSummary() {
+        if (_isRunConfigLoading.value) return
+        viewModelScope.launch {
+            _isRunConfigLoading.value = true
+            _resultTitle.value = "运行配置 (running_config.json)"
+            try {
+                val configPath = withContext(Dispatchers.IO) { configRepository.generateConfigFile() }
+                if (configPath.isNullOrBlank()) {
+                    _resultMessage.value = "无法生成运行配置：未选择配置或生成失败。"
+                } else {
+                    val rawJson = withContext(Dispatchers.IO) { File(configPath).readText() }
+                    val runConfig = try {
+                        gson.fromJson(rawJson, SingBoxConfig::class.java)
+                    } catch (_: Exception) {
+                        null
+                    }
+
+                    val rules = runConfig?.route?.rules.orEmpty()
+                    val pkgRules = rules.filter { !it.packageName.isNullOrEmpty() }
+                    val finalOutbound = runConfig?.route?.finalOutbound ?: "(null)"
+
+                    val outboundTags = runConfig?.outbounds.orEmpty().map { it.tag }.toSet()
+
+                    val samplePkgRule = pkgRules.firstOrNull()
+                    val sampleOutbound = samplePkgRule?.outbound ?: "(none)"
+                    val samplePkgs = samplePkgRule?.packageName?.take(5).orEmpty()
+
+                    _resultMessage.value = buildString {
+                        appendLine("文件: $configPath")
+                        appendLine("final 出站: $finalOutbound")
+                        appendLine("路由规则数: ${rules.size}")
+                        appendLine("应用分流规则数(package_name): ${pkgRules.size}")
+                        appendLine("是否包含应用分流规则: ${pkgRules.isNotEmpty()}")
+                        appendLine("示例(package_name -> outbound): $samplePkgs -> $sampleOutbound")
+                        appendLine("出站 tag 包含 final: ${outboundTags.contains(finalOutbound)}")
+                        appendLine()
+                        appendLine("提示:")
+                        appendLine("- 若应用分流无效且这里显示 package_name=0，则是规则未生成/未启用。")
+                        appendLine("- 若 package_name>0 但仍无效，通常是运行时无法识别连接归属应用 (UID/package)。")
+                    }
+                }
+            } catch (e: Exception) {
+                _resultMessage.value = "读取运行配置失败: ${e.message}"
+            } finally {
+                _isRunConfigLoading.value = false
+                _showResultDialog.value = true
+            }
+        }
+    }
+
+    fun exportRunningConfigToExternalFiles() {
+        if (_isRunConfigLoading.value) return
+        viewModelScope.launch {
+            _isRunConfigLoading.value = true
+            _resultTitle.value = "导出运行配置"
+            try {
+                val configPath = withContext(Dispatchers.IO) { configRepository.generateConfigFile() }
+                if (configPath.isNullOrBlank()) {
+                    _resultMessage.value = "无法导出：未选择配置或生成失败。"
+                } else {
+                    val src = File(configPath)
+                    val outBase = getApplication<Application>().getExternalFilesDir(null)
+                    if (outBase == null) {
+                        _resultMessage.value = "无法导出：externalFilesDir 不可用。"
+                    } else {
+                        val exportDir = File(outBase, "exports").also { it.mkdirs() }
+                        val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                        val dst = File(exportDir, "running_config_$ts.json")
+                        withContext(Dispatchers.IO) {
+                            src.copyTo(dst, overwrite = true)
+                        }
+                        _resultMessage.value = "已导出运行配置：\n${dst.absolutePath}\n\n说明：该路径位于应用外部存储目录，release 包也可用于自检/分享。"
+                    }
+                }
+            } catch (e: Exception) {
+                _resultMessage.value = "导出失败: ${e.message}"
+            } finally {
+                _isRunConfigLoading.value = false
+                _showResultDialog.value = true
+            }
+        }
     }
 
     fun runConnectivityCheck() {
@@ -176,7 +276,93 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
             _showResultDialog.value = true
         }
     }
-    
+
+    fun runAppRoutingDiagnostics() {
+        if (_isAppRoutingDiagLoading.value) return
+        viewModelScope.launch {
+            _isAppRoutingDiagLoading.value = true
+            _resultTitle.value = "应用分流诊断"
+            try {
+                val procPaths = listOf(
+                    "/proc/net/tcp",
+                    "/proc/net/tcp6",
+                    "/proc/net/udp",
+                    "/proc/net/udp6"
+                )
+
+                val procReport = buildString {
+                    appendLine("Android API: ${Build.VERSION.SDK_INT}")
+                    appendLine()
+                    appendLine("ProcFS 可读性：")
+                    procPaths.forEach { path ->
+                        val file = File(path)
+                        val status = try {
+                            if (!file.exists()) {
+                                "不存在"
+                            } else if (!file.canRead()) {
+                                "存在但不可读"
+                            } else {
+                                val firstLine = runCatching { file.bufferedReader().use { it.readLine() } }.getOrNull()
+                                "可读 (首行: ${firstLine ?: "null"})"
+                            }
+                        } catch (e: Exception) {
+                            "读取异常: ${e.message}"
+                        }
+                        appendLine("- $path: $status")
+                    }
+                    appendLine()
+                    appendLine("说明：")
+                    appendLine("- 若 /proc/net/* 不可读，libbox 即使启用 ProcFS（useProcFS=true）也可能无法通过 package_name 匹配应用流量。")
+                    appendLine("- 若运行配置里 package_name>0 但实际不生效，通常需要实现连接归属查询（findConnectionOwner）作为替代。")
+                }
+
+                _resultMessage.value = procReport
+            } catch (e: Exception) {
+                _resultMessage.value = "诊断失败: ${e.message}"
+            } finally {
+                _isAppRoutingDiagLoading.value = false
+                _showResultDialog.value = true
+            }
+        }
+    }
+
+    fun showConnectionOwnerStats() {
+        if (_isConnOwnerStatsLoading.value) return
+        viewModelScope.launch {
+            _isConnOwnerStatsLoading.value = true
+            _resultTitle.value = "连接归属统计 (findConnectionOwner)"
+            try {
+                val s = SingBoxService.getConnectionOwnerStatsSnapshot()
+                _resultMessage.value = buildString {
+                    appendLine("calls: ${s.calls}")
+                    appendLine("invalidArgs: ${s.invalidArgs}")
+                    appendLine("uidResolved: ${s.uidResolved}")
+                    appendLine("securityDenied: ${s.securityDenied}")
+                    appendLine("otherException: ${s.otherException}")
+                    appendLine("lastUid: ${s.lastUid}")
+                    appendLine("lastEvent: ${s.lastEvent}")
+                    appendLine()
+                    appendLine("判读：")
+                    appendLine("- 若 uidResolved=0 且 securityDenied>0：ROM/系统拒绝 getConnectionOwnerUid；package_name 无法生效。")
+                    appendLine("- 若 uidResolved=0 且 invalidArgs 很高：可能 libbox 传入地址/端口不完整（或未走此回调）。")
+                    appendLine("- 若 calls≈0：说明当前流量未触发 owner 查询（可能未启用相关功能或走了其他路径）。")
+                }
+            } catch (e: Exception) {
+                _resultMessage.value = "读取统计失败: ${e.message}"
+            } finally {
+                _isConnOwnerStatsLoading.value = false
+                _showResultDialog.value = true
+            }
+        }
+    }
+
+    fun resetConnectionOwnerStats() {
+        SingBoxService.resetConnectionOwnerStats()
+        _resultTitle.value = "连接归属统计"
+        _resultMessage.value = "已重置 findConnectionOwner 统计计数。"
+        _showResultDialog.value = true
+    }
+
     private data class MatchResult(val rule: String, val outbound: String)
 
     private fun findMatch(config: SingBoxConfig, domain: String): MatchResult {

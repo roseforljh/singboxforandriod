@@ -1473,19 +1473,17 @@ class ConfigRepository(private val context: Context) {
     ): List<RouteRule> {
         val rules = mutableListOf<RouteRule>()
         
+        fun resolveOutboundTagForNodeId(nodeId: String?): String? {
+            if (nodeId.isNullOrBlank()) return null
+            val nodeName = _nodes.value.firstOrNull { it.id == nodeId }?.name ?: return null
+            return if (outbounds.any { it.tag == nodeName }) nodeName else null
+        }
+        
         // 1. 处理应用规则（单个应用）
         settings.appRules.filter { it.enabled }.forEach { rule ->
             val outboundTag = when (rule.outbound) {
                 OutboundTag.DIRECT -> "direct"
-                OutboundTag.PROXY -> {
-                    // 如果指定了特定节点，使用该节点；否则使用默认代理选择器
-                    if (!rule.specificNodeId.isNullOrEmpty() && 
-                        outbounds.any { it.tag == rule.specificNodeId }) {
-                        rule.specificNodeId
-                    } else {
-                        defaultProxyTag
-                    }
-                }
+                OutboundTag.PROXY -> resolveOutboundTagForNodeId(rule.specificNodeId) ?: defaultProxyTag
                 OutboundTag.BLOCK -> "block"
             }
             
@@ -1501,14 +1499,7 @@ class ConfigRepository(private val context: Context) {
         settings.appGroups.filter { it.enabled }.forEach { group ->
             val outboundTag = when (group.outbound) {
                 OutboundTag.DIRECT -> "direct"
-                OutboundTag.PROXY -> {
-                    if (!group.specificNodeId.isNullOrEmpty() && 
-                        outbounds.any { it.tag == group.specificNodeId }) {
-                        group.specificNodeId
-                    } else {
-                        defaultProxyTag
-                    }
-                }
+                OutboundTag.PROXY -> resolveOutboundTagForNodeId(group.specificNodeId) ?: defaultProxyTag
                 OutboundTag.BLOCK -> "block"
             }
             

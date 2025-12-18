@@ -13,6 +13,8 @@ import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.os.Process
+import android.system.OsConstants
 import android.util.Log
 import com.kunk.singbox.MainActivity
 import com.kunk.singbox.model.AppSettings
@@ -24,10 +26,23 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import java.io.File
+import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.NetworkInterface
+import java.util.concurrent.atomic.AtomicLong
 
 class SingBoxService : VpnService() {
-    
+
+    data class ConnectionOwnerStatsSnapshot(
+        val calls: Long,
+        val invalidArgs: Long,
+        val uidResolved: Long,
+        val securityDenied: Long,
+        val otherException: Long,
+        val lastUid: Int,
+        val lastEvent: String
+    )
+
     companion object {
         private const val TAG = "SingBoxService"
         private const val NOTIFICATION_ID = 1
@@ -71,12 +86,44 @@ class SingBoxService : VpnService() {
             private set
 
         private var lastConfigPath: String? = null
+
+        private val connectionOwnerCalls = AtomicLong(0)
+        private val connectionOwnerInvalidArgs = AtomicLong(0)
+        private val connectionOwnerUidResolved = AtomicLong(0)
+        private val connectionOwnerSecurityDenied = AtomicLong(0)
+        private val connectionOwnerOtherException = AtomicLong(0)
+
+        @Volatile private var connectionOwnerLastUid: Int = 0
+        @Volatile private var connectionOwnerLastEvent: String = ""
+
+        fun getConnectionOwnerStatsSnapshot(): ConnectionOwnerStatsSnapshot {
+            return ConnectionOwnerStatsSnapshot(
+                calls = connectionOwnerCalls.get(),
+                invalidArgs = connectionOwnerInvalidArgs.get(),
+                uidResolved = connectionOwnerUidResolved.get(),
+                securityDenied = connectionOwnerSecurityDenied.get(),
+                otherException = connectionOwnerOtherException.get(),
+                lastUid = connectionOwnerLastUid,
+                lastEvent = connectionOwnerLastEvent
+            )
+        }
+
+        fun resetConnectionOwnerStats() {
+            connectionOwnerCalls.set(0)
+            connectionOwnerInvalidArgs.set(0)
+            connectionOwnerUidResolved.set(0)
+            connectionOwnerSecurityDenied.set(0)
+            connectionOwnerOtherException.set(0)
+            connectionOwnerLastUid = 0
+            connectionOwnerLastEvent = ""
+        }
     }
     
     private var vpnInterface: ParcelFileDescriptor? = null
     private var boxService: BoxService? = null
     private var currentSettings: AppSettings? = null
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    @Volatile private var connectionOwnerPermissionDeniedLogged = false
     
     // Network monitoring
     private var connectivityManager: ConnectivityManager? = null
@@ -142,22 +189,113 @@ class SingBoxService : VpnService() {
         }
         
         override fun usePlatformAutoDetectInterfaceControl(): Boolean = true
-        
-        override fun useProcFS(): Boolean = false
-        
+
+        override fun useProcFS(): Boolean {
+            val procPaths = listOf(
+                "/proc/net/tcp",
+                "/proc/net/tcp6",
+                "/proc/net/udp",
+                "/proc/net/udp6"
+            )
+
+            val readable = procPaths.any { path ->
+                try {
+                    val file = File(path)
+                    file.exists() && file.canRead()
+                } catch (_: Exception) {
+                    false
+                }
+            }
+
+            if (!readable) {
+                connectionOwnerLastEvent = "procfs_unreadable -> force findConnectionOwner"
+            }
+
+            return readable
+        }
+         
         override fun findConnectionOwner(
             ipProtocol: Int,
             sourceAddress: String?,
             sourcePort: Int,
             destinationAddress: String?,
             destinationPort: Int
-        ): Int = 0
+        ): Int {
+            connectionOwnerCalls.incrementAndGet()
+
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                connectionOwnerInvalidArgs.incrementAndGet()
+                connectionOwnerLastEvent = "api<29"
+                return 0
+            }
+
+            fun parseAddress(value: String?): InetAddress? {
+                if (value.isNullOrBlank()) return null
+                val cleaned = value.substringBefore("%")
+                return try {
+                    InetAddress.getByName(cleaned)
+                } catch (_: Exception) {
+                    null
+                }
+            }
+
+            val sourceIp = parseAddress(sourceAddress)
+            val destinationIp = parseAddress(destinationAddress)
+            if (sourceIp == null || destinationIp == null || sourcePort <= 0 || destinationPort <= 0) {
+                connectionOwnerInvalidArgs.incrementAndGet()
+                connectionOwnerLastEvent =
+                    "invalid_args src=$sourceAddress:$sourcePort dst=$destinationAddress:$destinationPort proto=$ipProtocol"
+                return 0
+            }
+
+            val protocol = when (ipProtocol) {
+                OsConstants.IPPROTO_TCP -> OsConstants.IPPROTO_TCP
+                OsConstants.IPPROTO_UDP -> OsConstants.IPPROTO_UDP
+                else -> ipProtocol
+            }
+
+            return try {
+                val cm = connectivityManager ?: getSystemService(ConnectivityManager::class.java) ?: return 0
+                val uid = cm.getConnectionOwnerUid(
+                    protocol,
+                    InetSocketAddress(sourceIp, sourcePort),
+                    InetSocketAddress(destinationIp, destinationPort)
+                )
+                if (uid > 0) {
+                    connectionOwnerUidResolved.incrementAndGet()
+                    connectionOwnerLastUid = uid
+                    connectionOwnerLastEvent =
+                        "resolved uid=$uid proto=$protocol $sourceIp:$sourcePort->$destinationIp:$destinationPort"
+                    uid
+                } else {
+                    connectionOwnerLastEvent =
+                        "unresolved uid=$uid proto=$protocol $sourceIp:$sourcePort->$destinationIp:$destinationPort"
+                    0
+                }
+            } catch (e: SecurityException) {
+                connectionOwnerSecurityDenied.incrementAndGet()
+                connectionOwnerLastEvent =
+                    "SecurityException getConnectionOwnerUid proto=$protocol $sourceIp:$sourcePort->$destinationIp:$destinationPort"
+                if (!connectionOwnerPermissionDeniedLogged) {
+                    connectionOwnerPermissionDeniedLogged = true
+                    Log.w(TAG, "getConnectionOwnerUid permission denied; app routing may not work on this ROM", e)
+                    com.kunk.singbox.repository.LogRepository.getInstance()
+                        .addLog("WARN SingBoxService: getConnectionOwnerUid permission denied; per-app routing (package_name) disabled on this ROM")
+                }
+                0
+            } catch (e: Exception) {
+                connectionOwnerOtherException.incrementAndGet()
+                connectionOwnerLastEvent = "Exception ${e.javaClass.simpleName}: ${e.message}"
+                0
+            }
+        }
         
         override fun packageNameByUid(uid: Int): String {
+            if (uid <= 0) return ""
             return try {
                 val pkgs = packageManager.getPackagesForUid(uid)
                 if (!pkgs.isNullOrEmpty()) pkgs[0] else ""
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 ""
             }
         }
@@ -166,8 +304,9 @@ class SingBoxService : VpnService() {
             if (packageName.isNullOrBlank()) return 0
             return try {
                 val appInfo = packageManager.getApplicationInfo(packageName, PackageManager.GET_META_DATA)
-                appInfo.uid
-            } catch (e: Exception) {
+                val uid = appInfo.uid
+                if (uid > 0) uid else 0
+            } catch (_: Exception) {
                 0
             }
         }

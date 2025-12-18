@@ -11,6 +11,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Dns
+import androidx.compose.material.icons.rounded.FileDownload
+import androidx.compose.material.icons.rounded.InsertDriveFile
 import androidx.compose.material.icons.rounded.NetworkCheck
 import androidx.compose.material.icons.rounded.Route
 import androidx.compose.material.icons.rounded.Speed
@@ -51,6 +53,9 @@ fun DiagnosticsScreen(
     val isPingLoading by viewModel.isPingLoading.collectAsState()
     val isDnsLoading by viewModel.isDnsLoading.collectAsState()
     val isRoutingLoading by viewModel.isRoutingLoading.collectAsState()
+    val isRunConfigLoading by viewModel.isRunConfigLoading.collectAsState()
+    val isAppRoutingDiagLoading by viewModel.isAppRoutingDiagLoading.collectAsState()
+    val isConnOwnerStatsLoading by viewModel.isConnOwnerStatsLoading.collectAsState()
 
     if (showResultDialog) {
         ConfirmDialog(
@@ -84,6 +89,44 @@ fun DiagnosticsScreen(
                 .verticalScroll(scrollState)
         ) {
             StandardCard {
+                SettingItem(
+                    title = "查看运行配置摘要",
+                    subtitle = if (isRunConfigLoading) "正在生成..." else "检查 package_name 规则是否生成",
+                    icon = Icons.Rounded.InsertDriveFile,
+                    onClick = { viewModel.showRunningConfigSummary() },
+                    enabled = !isRunConfigLoading
+                )
+                SettingItem(
+                    title = "导出运行配置",
+                    subtitle = if (isRunConfigLoading) "正在导出..." else "导出 running_config.json 到外部存储目录",
+                    icon = Icons.Rounded.FileDownload,
+                    onClick = { viewModel.exportRunningConfigToExternalFiles() },
+                    enabled = !isRunConfigLoading
+                )
+                SettingItem(
+                    title = "应用分流诊断",
+                    subtitle = if (isAppRoutingDiagLoading) "正在检测..." else "检查 /proc/net 可读性（影响 package_name 生效）",
+                    icon = Icons.Rounded.Route,
+                    onClick = { viewModel.runAppRoutingDiagnostics() },
+                    enabled = !isAppRoutingDiagLoading
+                )
+                SettingItem(
+                    title = "连接归属统计",
+                    subtitle = if (isConnOwnerStatsLoading) "正在读取..." else "查看 findConnectionOwner 成功/失败计数",
+                    icon = Icons.Rounded.Route,
+                    onClick = { viewModel.showConnectionOwnerStats() },
+                    enabled = !isConnOwnerStatsLoading
+                )
+                SettingItem(
+                    title = "重置连接归属统计",
+                    subtitle = "清零计数器（便于复现问题）",
+                    icon = Icons.Rounded.Route,
+                    onClick = { viewModel.resetConnectionOwnerStats() },
+                    enabled = true
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
                 SettingItem(
                     title = "连通性检查",
                     subtitle = if (isConnectivityLoading) "正在检查..." else "连接测试 (www.google.com)",

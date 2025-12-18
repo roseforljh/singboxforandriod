@@ -35,10 +35,14 @@ import com.kunk.singbox.model.*
 import com.kunk.singbox.repository.ConfigRepository
 import com.kunk.singbox.ui.components.ClickableDropdownField
 import com.kunk.singbox.ui.components.ConfirmDialog
+import com.kunk.singbox.ui.components.SingleSelectDialog
 import com.kunk.singbox.ui.components.StandardCard
 import com.kunk.singbox.ui.components.StyledTextField
 import com.kunk.singbox.ui.theme.*
+import com.kunk.singbox.viewmodel.NodesViewModel
+import com.kunk.singbox.viewmodel.ProfilesViewModel
 import com.kunk.singbox.viewmodel.SettingsViewModel
+import com.kunk.singbox.model.ProfileUi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -46,7 +50,9 @@ import kotlinx.coroutines.withContext
 @Composable
 fun AppGroupsScreen(
     navController: NavController,
-    settingsViewModel: SettingsViewModel = viewModel()
+    settingsViewModel: SettingsViewModel = viewModel(),
+    nodesViewModel: NodesViewModel = viewModel(),
+    profilesViewModel: ProfilesViewModel = viewModel()
 ) {
     val context = LocalContext.current
     val settings by settingsViewModel.settings.collectAsState()
@@ -54,9 +60,10 @@ fun AppGroupsScreen(
     var editingGroup by remember { mutableStateOf<AppGroup?>(null) }
     var showDeleteConfirm by remember { mutableStateOf<AppGroup?>(null) }
 
-    // 获取节点列表
-    val configRepository = remember { ConfigRepository.getInstance(context) }
-    val nodes by configRepository.nodes.collectAsState()
+    // 获取节点、配置和组信息
+    val nodes by nodesViewModel.allNodes.collectAsState()
+    val availableGroups by nodesViewModel.allNodeGroups.collectAsState() // Renamed to avoid confusion with AppGroup
+    val profiles by profilesViewModel.profiles.collectAsState()
 
     // 获取已安装应用列表
     var installedApps by remember { mutableStateOf<List<InstalledApp>>(emptyList()) }
@@ -84,6 +91,8 @@ fun AppGroupsScreen(
         AppGroupEditorDialog(
             installedApps = installedApps,
             nodes = nodes,
+            profiles = profiles,
+            groups = availableGroups,
             onDismiss = { showAddDialog = false },
             onConfirm = { group ->
                 settingsViewModel.addAppGroup(group)
@@ -97,6 +106,8 @@ fun AppGroupsScreen(
             initialGroup = editingGroup,
             installedApps = installedApps,
             nodes = nodes,
+            profiles = profiles,
+            groups = availableGroups,
             onDismiss = { editingGroup = null },
             onConfirm = { group ->
                 settingsViewModel.updateAppGroup(group)
@@ -187,12 +198,26 @@ fun AppGroupsScreen(
                     }
                 } else {
                     items(settings.appGroups) { group ->
-                        val nodeName = group.specificNodeId?.let { nodeId ->
-                            nodes.find { it.id == nodeId }?.name
+                        val mode = group.outboundMode ?: RuleSetOutboundMode.DIRECT
+                        val outboundText = when (mode) {
+                            RuleSetOutboundMode.DIRECT -> "直连"
+                            RuleSetOutboundMode.BLOCK -> "拦截"
+                            RuleSetOutboundMode.PROXY -> "代理"
+                            RuleSetOutboundMode.NODE -> {
+                                val node = nodes.find { it.id == group.outboundValue }
+                                val profileName = profiles.find { p -> p.id == node?.sourceProfileId }?.name
+                                if (node != null && profileName != null) {
+                                    "${node.name} ($profileName)"
+                                } else {
+                                    node?.name ?: "未知节点"
+                                }
+                            }
+                            RuleSetOutboundMode.PROFILE -> profiles.find { it.id == group.outboundValue }?.name ?: "未知配置"
+                            RuleSetOutboundMode.GROUP -> group.outboundValue ?: "未知组"
                         }
                         AppGroupCard(
                             group = group,
-                            nodeName = nodeName,
+                            outboundText = outboundText,
                             onClick = { editingGroup = group },
                             onToggle = { settingsViewModel.toggleAppGroupEnabled(group.id) },
                             onDelete = { showDeleteConfirm = group }
@@ -207,16 +232,17 @@ fun AppGroupsScreen(
 @Composable
 fun AppGroupCard(
     group: AppGroup,
-    nodeName: String?,
+    outboundText: String,
     onClick: () -> Unit,
     onToggle: () -> Unit,
     onDelete: () -> Unit
 ) {
     val context = LocalContext.current
-    val (outboundIcon, color) = when (group.outbound) {
-        OutboundTag.PROXY -> Icons.Rounded.Shield to Color(0xFF4CAF50)
-        OutboundTag.DIRECT -> Icons.Rounded.Public to Color(0xFF2196F3)
-        OutboundTag.BLOCK -> Icons.Rounded.Block to Color(0xFFFF5252)
+    val mode = group.outboundMode ?: RuleSetOutboundMode.DIRECT
+    val (outboundIcon, color) = when (mode) {
+        RuleSetOutboundMode.PROXY, RuleSetOutboundMode.NODE, RuleSetOutboundMode.PROFILE, RuleSetOutboundMode.GROUP -> Icons.Rounded.Shield to Color(0xFF4CAF50)
+        RuleSetOutboundMode.DIRECT -> Icons.Rounded.Public to Color(0xFF2196F3)
+        RuleSetOutboundMode.BLOCK -> Icons.Rounded.Block to Color(0xFFFF5252)
     }
 
     StandardCard {
@@ -246,13 +272,7 @@ fun AppGroupCard(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = buildString {
-                            append(group.outbound.displayName)
-                            if (group.outbound == OutboundTag.PROXY && nodeName != null) {
-                                append(" → $nodeName")
-                            }
-                            append(" • ${group.apps.size} 个应用")
-                        },
+                        text = "${mode.displayName} → $outboundText • ${group.apps.size} 个应用",
                         style = MaterialTheme.typography.bodySmall,
                         color = color
                     )
@@ -331,17 +351,23 @@ fun AppGroupEditorDialog(
     initialGroup: AppGroup? = null,
     installedApps: List<InstalledApp>,
     nodes: List<NodeUi>,
+    profiles: List<ProfileUi>,
+    groups: List<String>,
     onDismiss: () -> Unit,
     onConfirm: (AppGroup) -> Unit
 ) {
     var groupName by remember { mutableStateOf(initialGroup?.name ?: "") }
-    var outbound by remember { mutableStateOf(initialGroup?.outbound ?: OutboundTag.PROXY) }
-    var selectedNodeId by remember { mutableStateOf(initialGroup?.specificNodeId) }
+    var outboundMode by remember { mutableStateOf(initialGroup?.outboundMode ?: RuleSetOutboundMode.PROXY) }
+    var outboundValue by remember { mutableStateOf(initialGroup?.outboundValue) }
     var selectedApps by remember { mutableStateOf(initialGroup?.apps?.toSet() ?: emptySet()) }
     
     var showAppSelector by remember { mutableStateOf(false) }
-    var showNodePicker by remember { mutableStateOf(false) }
-    var showOutboundDialog by remember { mutableStateOf(false) }
+    var showOutboundModeDialog by remember { mutableStateOf(false) }
+    var showTargetSelectionDialog by remember { mutableStateOf(false) }
+    
+    // Target selection state
+    var targetSelectionTitle by remember { mutableStateOf("") }
+    var targetOptions by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) } // Name, ID/Value
 
     if (showAppSelector) {
         MultiAppSelectorDialog(
@@ -354,28 +380,63 @@ fun AppGroupEditorDialog(
             onDismiss = { showAppSelector = false }
         )
     }
+    
+    if (showOutboundModeDialog) {
+        val options = RuleSetOutboundMode.entries.map { it.displayName }
+        SingleSelectDialog(
+            title = "选择出站模式",
+            options = options,
+            selectedIndex = RuleSetOutboundMode.entries.indexOf(outboundMode),
+            onSelect = { index ->
+                val selectedMode = RuleSetOutboundMode.entries[index]
+                outboundMode = selectedMode
+                
+                // Reset value if mode changed
+                if (selectedMode != initialGroup?.outboundMode) {
+                    outboundValue = null
+                } else {
+                    outboundValue = initialGroup?.outboundValue
+                }
 
-    if (showNodePicker && nodes.isNotEmpty()) {
-        NodePickerDialog(
-            nodes = nodes,
-            selectedNodeId = selectedNodeId,
-            onSelect = { nodeId ->
-                selectedNodeId = nodeId
-                showNodePicker = false
+                showOutboundModeDialog = false
+                
+                // If mode requires further selection, trigger it
+                if (selectedMode == RuleSetOutboundMode.NODE ||
+                    selectedMode == RuleSetOutboundMode.PROFILE ||
+                    selectedMode == RuleSetOutboundMode.GROUP) {
+                    
+                    when (selectedMode) {
+                        RuleSetOutboundMode.NODE -> {
+                            targetSelectionTitle = "选择节点"
+                            targetOptions = nodes.map { it.name to it.id }
+                        }
+                        RuleSetOutboundMode.PROFILE -> {
+                            targetSelectionTitle = "选择配置"
+                            targetOptions = profiles.map { it.name to it.id }
+                        }
+                        RuleSetOutboundMode.GROUP -> {
+                            targetSelectionTitle = "选择节点组"
+                            targetOptions = groups.map { it to it }
+                        }
+                        else -> {}
+                    }
+                    showTargetSelectionDialog = true
+                }
             },
-            onDismiss = { showNodePicker = false }
+            onDismiss = { showOutboundModeDialog = false }
         )
     }
 
-    if (showOutboundDialog) {
-        OutboundSelectorDialog(
-            currentOutbound = outbound,
-            onSelect = { selected ->
-                outbound = selected
-                if (outbound != OutboundTag.PROXY) selectedNodeId = null
-                showOutboundDialog = false
+    if (showTargetSelectionDialog) {
+        SingleSelectDialog(
+            title = targetSelectionTitle,
+            options = targetOptions.map { it.first },
+            selectedIndex = targetOptions.indexOfFirst { it.second == outboundValue }.coerceAtLeast(0),
+            onSelect = { index ->
+                outboundValue = targetOptions[index].second
+                showTargetSelectionDialog = false
             },
-            onDismiss = { showOutboundDialog = false }
+            onDismiss = { showTargetSelectionDialog = false }
         )
     }
 
@@ -403,19 +464,56 @@ fun AppGroupEditorDialog(
                 )
 
                 ClickableDropdownField(
-                    label = "出站方式",
-                    value = outbound.displayName,
-                    onClick = { showOutboundDialog = true }
+                    label = "出站模式",
+                    value = outboundMode.displayName,
+                    onClick = { showOutboundModeDialog = true }
                 )
 
-                if (outbound == OutboundTag.PROXY && nodes.isNotEmpty()) {
-                    val nodeName = selectedNodeId?.let { id ->
-                        nodes.find { it.id == id }?.name
-                    } ?: "默认节点（跟随全局）"
+                // 如果是需要选择目标的模式，显示目标选择
+                if (outboundMode == RuleSetOutboundMode.NODE ||
+                    outboundMode == RuleSetOutboundMode.PROFILE ||
+                    outboundMode == RuleSetOutboundMode.GROUP) {
+                    
+                    val targetName = when (outboundMode) {
+                        RuleSetOutboundMode.NODE -> {
+                            val node = nodes.find { it.id == outboundValue }
+                            val profileName = profiles.find { it.id == node?.sourceProfileId }?.name
+                            if (node != null && profileName != null) "${node.name} ($profileName)" else node?.name
+                        }
+                        RuleSetOutboundMode.PROFILE -> profiles.find { it.id == outboundValue }?.name
+                        RuleSetOutboundMode.GROUP -> outboundValue
+                        else -> null
+                    } ?: "点击选择..."
+                    
                     ClickableDropdownField(
-                        label = "指定代理节点",
-                        value = nodeName,
-                        onClick = { showNodePicker = true }
+                        label = when (outboundMode) {
+                            RuleSetOutboundMode.NODE -> "选择节点"
+                            RuleSetOutboundMode.PROFILE -> "选择配置"
+                            RuleSetOutboundMode.GROUP -> "选择节点组"
+                            else -> "选择目标"
+                        },
+                        value = targetName,
+                        onClick = {
+                            when (outboundMode) {
+                                RuleSetOutboundMode.NODE -> {
+                                    targetSelectionTitle = "选择节点"
+                                    targetOptions = nodes.map { node ->
+                                        val profileName = profiles.find { it.id == node.sourceProfileId }?.name ?: "未知"
+                                        "${node.name} ($profileName)" to node.id
+                                    }
+                                }
+                                RuleSetOutboundMode.PROFILE -> {
+                                    targetSelectionTitle = "选择配置"
+                                    targetOptions = profiles.map { it.name to it.id }
+                                }
+                                RuleSetOutboundMode.GROUP -> {
+                                    targetSelectionTitle = "选择节点组"
+                                    targetOptions = groups.map { it to it }
+                                }
+                                else -> {}
+                            }
+                            showTargetSelectionDialog = true
+                        }
                     )
                 }
 
@@ -461,13 +559,13 @@ fun AppGroupEditorDialog(
                     val group = initialGroup?.copy(
                         name = groupName,
                         apps = selectedApps.toList(),
-                        outbound = outbound,
-                        specificNodeId = if (outbound == OutboundTag.PROXY) selectedNodeId else null
+                        outboundMode = outboundMode,
+                        outboundValue = outboundValue
                     ) ?: AppGroup(
                         name = groupName,
                         apps = selectedApps.toList(),
-                        outbound = outbound,
-                        specificNodeId = if (outbound == OutboundTag.PROXY) selectedNodeId else null
+                        outboundMode = outboundMode,
+                        outboundValue = outboundValue
                     )
                     onConfirm(group)
                 },
@@ -517,60 +615,6 @@ fun SelectedAppChip(app: AppInfo, onRemove: () -> Unit) {
     }
 }
 
-@Composable
-fun OutboundSelectorDialog(
-    currentOutbound: OutboundTag,
-    onSelect: (OutboundTag) -> Unit,
-    onDismiss: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(24.dp),
-        containerColor = Neutral800,
-        title = { Text("选择出站方式", fontWeight = FontWeight.Bold, color = TextPrimary) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutboundTag.entries.forEach { tag ->
-                    val (icon, color) = when (tag) {
-                        OutboundTag.PROXY -> Icons.Rounded.Shield to Color(0xFF4CAF50)
-                        OutboundTag.DIRECT -> Icons.Rounded.Public to Color(0xFF2196F3)
-                        OutboundTag.BLOCK -> Icons.Rounded.Block to Color(0xFFFF5252)
-                    }
-                    val isSelected = tag == currentOutbound
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(if (isSelected) color.copy(alpha = 0.15f) else Color.Transparent)
-                            .clickable { onSelect(tag) }
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(24.dp))
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(tag.displayName, color = TextPrimary, fontWeight = FontWeight.Medium)
-                            Text(
-                                when (tag) {
-                                    OutboundTag.PROXY -> "通过代理节点访问"
-                                    OutboundTag.DIRECT -> "直接连接，不使用代理"
-                                    OutboundTag.BLOCK -> "阻止联网"
-                                },
-                                fontSize = 12.sp,
-                                color = Neutral500
-                            )
-                        }
-                        if (isSelected) {
-                            Icon(Icons.Rounded.Check, contentDescription = null, tint = color, modifier = Modifier.size(20.dp))
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消", color = TextSecondary) } }
-    )
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

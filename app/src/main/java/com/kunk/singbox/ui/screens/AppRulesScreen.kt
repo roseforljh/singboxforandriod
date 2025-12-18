@@ -1,5 +1,6 @@
 package com.kunk.singbox.ui.screens
 
+import android.R.attr.tag
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
@@ -42,7 +43,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
 import com.kunk.singbox.model.AppRule
 import com.kunk.singbox.model.InstalledApp
-import com.kunk.singbox.model.OutboundTag
+import com.kunk.singbox.model.RuleSetOutboundMode
+import com.kunk.singbox.model.ProfileUi
 import com.kunk.singbox.ui.components.ClickableDropdownField
 import com.kunk.singbox.ui.components.ConfirmDialog
 import com.kunk.singbox.ui.components.SingleSelectDialog
@@ -55,7 +57,8 @@ import com.kunk.singbox.ui.theme.PureWhite
 import com.kunk.singbox.ui.theme.TextPrimary
 import com.kunk.singbox.ui.theme.TextSecondary
 import com.kunk.singbox.model.NodeUi
-import com.kunk.singbox.repository.ConfigRepository
+import com.kunk.singbox.viewmodel.NodesViewModel
+import com.kunk.singbox.viewmodel.ProfilesViewModel
 import com.kunk.singbox.viewmodel.SettingsViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -64,7 +67,9 @@ import kotlinx.coroutines.withContext
 @Composable
 fun AppRulesScreen(
     navController: NavController,
-    settingsViewModel: SettingsViewModel = viewModel()
+    settingsViewModel: SettingsViewModel = viewModel(),
+    nodesViewModel: NodesViewModel = viewModel(),
+    profilesViewModel: ProfilesViewModel = viewModel()
 ) {
     val context = LocalContext.current
     val settings by settingsViewModel.settings.collectAsState()
@@ -72,9 +77,10 @@ fun AppRulesScreen(
     var editingRule by remember { mutableStateOf<AppRule?>(null) }
     var showDeleteConfirm by remember { mutableStateOf<AppRule?>(null) }
 
-    // 获取节点列表
-    val configRepository = remember { ConfigRepository.getInstance(context) }
-    val nodes by configRepository.nodes.collectAsState()
+    // 获取节点、配置和组信息
+    val nodes by nodesViewModel.allNodes.collectAsState()
+    val groups by nodesViewModel.allNodeGroups.collectAsState()
+    val profiles by profilesViewModel.profiles.collectAsState()
 
     // 获取已安装应用列表
     var installedApps by remember { mutableStateOf<List<InstalledApp>>(emptyList()) }
@@ -106,6 +112,8 @@ fun AppRulesScreen(
             installedApps = installedApps,
             existingPackages = settings.appRules.map { it.packageName }.toSet(),
             nodes = nodes,
+            profiles = profiles,
+            groups = groups,
             onDismiss = { showAddDialog = false },
             onConfirm = { rule ->
                 settingsViewModel.addAppRule(rule)
@@ -120,6 +128,8 @@ fun AppRulesScreen(
             installedApps = installedApps,
             existingPackages = settings.appRules.filter { it.id != editingRule?.id }.map { it.packageName }.toSet(),
             nodes = nodes,
+            profiles = profiles,
+            groups = groups,
             onDismiss = { editingRule = null },
             onConfirm = { rule ->
                 settingsViewModel.updateAppRule(rule)
@@ -194,9 +204,9 @@ fun AppRulesScreen(
                             Row(
                                 horizontalArrangement = Arrangement.spacedBy(16.dp)
                             ) {
-                                OutboundChip(OutboundTag.PROXY, "代理")
-                                OutboundChip(OutboundTag.DIRECT, "直连")
-                                OutboundChip(OutboundTag.BLOCK, "拦截")
+                                OutboundChip(RuleSetOutboundMode.PROXY, "代理")
+                                OutboundChip(RuleSetOutboundMode.DIRECT, "直连")
+                                OutboundChip(RuleSetOutboundMode.BLOCK, "拦截")
                             }
                         }
                     }
@@ -234,12 +244,26 @@ fun AppRulesScreen(
                     }
                 } else {
                     items(settings.appRules) { rule ->
-                        val nodeName = rule.specificNodeId?.let { nodeId ->
-                            nodes.find { it.id == nodeId }?.name
+                        val mode = rule.outboundMode ?: RuleSetOutboundMode.DIRECT
+                        val outboundText = when (mode) {
+                            RuleSetOutboundMode.DIRECT -> "直连"
+                            RuleSetOutboundMode.BLOCK -> "拦截"
+                            RuleSetOutboundMode.PROXY -> "代理"
+                            RuleSetOutboundMode.NODE -> {
+                                val node = nodes.find { it.id == rule.outboundValue }
+                                val profileName = profiles.find { p -> p.id == node?.sourceProfileId }?.name
+                                if (node != null && profileName != null) {
+                                    "${node.name} ($profileName)"
+                                } else {
+                                    node?.name ?: "未知节点"
+                                }
+                            }
+                            RuleSetOutboundMode.PROFILE -> profiles.find { it.id == rule.outboundValue }?.name ?: "未知配置"
+                            RuleSetOutboundMode.GROUP -> rule.outboundValue ?: "未知组"
                         }
                         AppRuleItem(
                             rule = rule,
-                            nodeName = nodeName,
+                            outboundText = outboundText,
                             onClick = { editingRule = rule },
                             onToggle = { settingsViewModel.toggleAppRuleEnabled(rule.id) },
                             onDelete = { showDeleteConfirm = rule }
@@ -252,11 +276,11 @@ fun AppRulesScreen(
 }
 
 @Composable
-fun OutboundChip(tag: OutboundTag, label: String) {
-    val (icon, color) = when (tag) {
-        OutboundTag.PROXY -> Icons.Rounded.Shield to Color(0xFF4CAF50)
-        OutboundTag.DIRECT -> Icons.Rounded.Public to Color(0xFF2196F3)
-        OutboundTag.BLOCK -> Icons.Rounded.Block to Color(0xFFFF5252)
+fun OutboundChip(mode: RuleSetOutboundMode, label: String) {
+    val (icon, color) = when (mode) {
+        RuleSetOutboundMode.PROXY, RuleSetOutboundMode.NODE, RuleSetOutboundMode.PROFILE, RuleSetOutboundMode.GROUP -> Icons.Rounded.Shield to Color(0xFF4CAF50)
+        RuleSetOutboundMode.DIRECT -> Icons.Rounded.Public to Color(0xFF2196F3)
+        RuleSetOutboundMode.BLOCK -> Icons.Rounded.Block to Color(0xFFFF5252)
     }
     
     Row(
@@ -280,16 +304,17 @@ fun OutboundChip(tag: OutboundTag, label: String) {
 @Composable
 fun AppRuleItem(
     rule: AppRule,
-    nodeName: String?,
+    outboundText: String,
     onClick: () -> Unit,
     onToggle: () -> Unit,
     onDelete: () -> Unit
 ) {
     val context = LocalContext.current
-    val (outboundIcon, color) = when (rule.outbound) {
-        OutboundTag.PROXY -> Icons.Rounded.Shield to Color(0xFF4CAF50)
-        OutboundTag.DIRECT -> Icons.Rounded.Public to Color(0xFF2196F3)
-        OutboundTag.BLOCK -> Icons.Rounded.Block to Color(0xFFFF5252)
+    val mode = rule.outboundMode ?: RuleSetOutboundMode.DIRECT
+    val (outboundIcon, color) = when (mode) {
+        RuleSetOutboundMode.PROXY, RuleSetOutboundMode.NODE, RuleSetOutboundMode.PROFILE, RuleSetOutboundMode.GROUP -> Icons.Rounded.Shield to Color(0xFF4CAF50)
+        RuleSetOutboundMode.DIRECT -> Icons.Rounded.Public to Color(0xFF2196F3)
+        RuleSetOutboundMode.BLOCK -> Icons.Rounded.Block to Color(0xFFFF5252)
     }
     
     // 加载应用图标
@@ -368,14 +393,9 @@ fun AppRuleItem(
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = buildString {
-                        append(rule.outbound.displayName)
-                        if (rule.outbound == OutboundTag.PROXY && nodeName != null) {
-                            append(" → $nodeName")
-                        }
-                    },
+                    text = "${mode.displayName} → $outboundText",
                     style = MaterialTheme.typography.bodySmall,
-                    color = if (rule.outbound == OutboundTag.PROXY) Color(0xFF4CAF50) else Neutral500,
+                    color = if (mode != RuleSetOutboundMode.DIRECT && mode != RuleSetOutboundMode.BLOCK) Color(0xFF4CAF50) else Neutral500,
                     maxLines = 1
                 )
             }
@@ -413,21 +433,28 @@ fun AppRuleEditorDialog(
     installedApps: List<InstalledApp>,
     existingPackages: Set<String>,
     nodes: List<NodeUi>,
+    profiles: List<ProfileUi>,
+    groups: List<String>,
     onDismiss: () -> Unit,
     onConfirm: (AppRule) -> Unit
 ) {
     var selectedApp by remember { mutableStateOf<InstalledApp?>(
-        initialRule?.let { rule -> 
-            InstalledApp(rule.packageName, rule.appName) 
+        initialRule?.let { rule ->
+            InstalledApp(rule.packageName, rule.appName)
         }
     ) }
-    var outbound by remember { mutableStateOf(initialRule?.outbound ?: OutboundTag.PROXY) }
-    var selectedNodeId by remember { mutableStateOf(initialRule?.specificNodeId) }
+    var outboundMode by remember { mutableStateOf(initialRule?.outboundMode ?: RuleSetOutboundMode.PROXY) }
+    var outboundValue by remember { mutableStateOf(initialRule?.outboundValue) }
+    
     var showAppPicker by remember { mutableStateOf(false) }
-    var showOutboundDialog by remember { mutableStateOf(false) }
-    var showNodePicker by remember { mutableStateOf(false) }
+    var showOutboundModeDialog by remember { mutableStateOf(false) }
+    var showTargetSelectionDialog by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var showSystemApps by remember { mutableStateOf(false) }
+
+    // Target selection state
+    var targetSelectionTitle by remember { mutableStateOf("") }
+    var targetOptions by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) } // Name, ID/Value
 
     if (showAppPicker) {
         AppPickerDialog(
@@ -445,33 +472,62 @@ fun AppRuleEditorDialog(
         )
     }
 
-    if (showOutboundDialog) {
-        val options = OutboundTag.entries.map { it.displayName }
+    if (showOutboundModeDialog) {
+        val options = RuleSetOutboundMode.entries.map { it.displayName }
         SingleSelectDialog(
-            title = "选择出站方式",
+            title = "选择出站模式",
             options = options,
-            selectedIndex = OutboundTag.entries.indexOf(outbound),
+            selectedIndex = RuleSetOutboundMode.entries.indexOf(outboundMode),
             onSelect = { index ->
-                outbound = OutboundTag.entries[index]
-                // 如果不是代理模式，清除节点选择
-                if (outbound != OutboundTag.PROXY) {
-                    selectedNodeId = null
+                val selectedMode = RuleSetOutboundMode.entries[index]
+                outboundMode = selectedMode
+                
+                // Reset value if mode changed
+                if (selectedMode != initialRule?.outboundMode) {
+                    outboundValue = null
+                } else {
+                    outboundValue = initialRule?.outboundValue
                 }
-                showOutboundDialog = false
+
+                showOutboundModeDialog = false
+                
+                // If mode requires further selection, trigger it
+                if (selectedMode == RuleSetOutboundMode.NODE ||
+                    selectedMode == RuleSetOutboundMode.PROFILE ||
+                    selectedMode == RuleSetOutboundMode.GROUP) {
+                    
+                    when (selectedMode) {
+                        RuleSetOutboundMode.NODE -> {
+                            targetSelectionTitle = "选择节点"
+                            targetOptions = nodes.map { it.name to it.id }
+                        }
+                        RuleSetOutboundMode.PROFILE -> {
+                            targetSelectionTitle = "选择配置"
+                            targetOptions = profiles.map { it.name to it.id }
+                        }
+                        RuleSetOutboundMode.GROUP -> {
+                            targetSelectionTitle = "选择节点组"
+                            targetOptions = groups.map { it to it }
+                        }
+                        else -> {}
+                    }
+                    showTargetSelectionDialog = true
+                }
             },
-            onDismiss = { showOutboundDialog = false }
+            onDismiss = { showOutboundModeDialog = false }
         )
     }
 
-    if (showNodePicker && nodes.isNotEmpty()) {
-        NodePickerDialog(
-            nodes = nodes,
-            selectedNodeId = selectedNodeId,
-            onSelect = { nodeId ->
-                selectedNodeId = nodeId
-                showNodePicker = false
+    if (showTargetSelectionDialog) {
+        SingleSelectDialog(
+            title = targetSelectionTitle,
+            options = targetOptions.map { it.first },
+            selectedIndex = targetOptions.indexOfFirst { it.second == outboundValue }.coerceAtLeast(0),
+            onSelect = { index ->
+                outboundValue = targetOptions[index].second
+                showTargetSelectionDialog = false
             },
-            onDismiss = { showNodePicker = false }
+            onDismiss = { showTargetSelectionDialog = false }
         )
     }
 
@@ -502,21 +558,56 @@ fun AppRuleEditorDialog(
 
                 // 选择出站方式
                 ClickableDropdownField(
-                    label = "出站方式",
-                    value = outbound.displayName,
-                    onClick = { showOutboundDialog = true }
+                    label = "出站模式",
+                    value = outboundMode.displayName,
+                    onClick = { showOutboundModeDialog = true }
                 )
 
-                // 如果是代理模式，显示节点选择
-                if (outbound == OutboundTag.PROXY && nodes.isNotEmpty()) {
-                    val nodeName = selectedNodeId?.let { id ->
-                        nodes.find { it.id == id }?.let { "${it.regionFlag ?: ""} ${it.name}".trim() }
-                    } ?: "默认节点（跟随全局）"
+                // 如果是需要选择目标的模式，显示目标选择
+                if (outboundMode == RuleSetOutboundMode.NODE ||
+                    outboundMode == RuleSetOutboundMode.PROFILE ||
+                    outboundMode == RuleSetOutboundMode.GROUP) {
+                    
+                    val targetName = when (outboundMode) {
+                        RuleSetOutboundMode.NODE -> {
+                            val node = nodes.find { it.id == outboundValue }
+                            val profileName = profiles.find { it.id == node?.sourceProfileId }?.name
+                            if (node != null && profileName != null) "${node.name} ($profileName)" else node?.name
+                        }
+                        RuleSetOutboundMode.PROFILE -> profiles.find { it.id == outboundValue }?.name
+                        RuleSetOutboundMode.GROUP -> outboundValue
+                        else -> null
+                    } ?: "点击选择..."
                     
                     ClickableDropdownField(
-                        label = "指定代理节点",
-                        value = nodeName,
-                        onClick = { showNodePicker = true }
+                        label = when (outboundMode) {
+                            RuleSetOutboundMode.NODE -> "选择节点"
+                            RuleSetOutboundMode.PROFILE -> "选择配置"
+                            RuleSetOutboundMode.GROUP -> "选择节点组"
+                            else -> "选择目标"
+                        },
+                        value = targetName,
+                        onClick = {
+                            when (outboundMode) {
+                                RuleSetOutboundMode.NODE -> {
+                                    targetSelectionTitle = "选择节点"
+                                    targetOptions = nodes.map { node ->
+                                        val profileName = profiles.find { it.id == node.sourceProfileId }?.name ?: "未知"
+                                        "${node.name} ($profileName)" to node.id
+                                    }
+                                }
+                                RuleSetOutboundMode.PROFILE -> {
+                                    targetSelectionTitle = "选择配置"
+                                    targetOptions = profiles.map { it.name to it.id }
+                                }
+                                RuleSetOutboundMode.GROUP -> {
+                                    targetSelectionTitle = "选择节点组"
+                                    targetOptions = groups.map { it to it }
+                                }
+                                else -> {}
+                            }
+                            showTargetSelectionDialog = true
+                        }
                     )
                 }
 
@@ -529,9 +620,9 @@ fun AppRuleEditorDialog(
                         .padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    OutboundExplanation(OutboundTag.PROXY, "通过代理节点访问")
-                    OutboundExplanation(OutboundTag.DIRECT, "直接连接，不使用代理")
-                    OutboundExplanation(OutboundTag.BLOCK, "阻止该应用联网")
+                    OutboundExplanation(RuleSetOutboundMode.PROXY, "通过代理节点访问")
+                    OutboundExplanation(RuleSetOutboundMode.DIRECT, "直接连接，不使用代理")
+                    OutboundExplanation(RuleSetOutboundMode.BLOCK, "阻止该应用联网")
                 }
             }
         },
@@ -542,13 +633,13 @@ fun AppRuleEditorDialog(
                         val rule = initialRule?.copy(
                             packageName = app.packageName,
                             appName = app.appName,
-                            outbound = outbound,
-                            specificNodeId = if (outbound == OutboundTag.PROXY) selectedNodeId else null
+                            outboundMode = outboundMode,
+                            outboundValue = outboundValue
                         ) ?: AppRule(
                             packageName = app.packageName,
                             appName = app.appName,
-                            outbound = outbound,
-                            specificNodeId = if (outbound == OutboundTag.PROXY) selectedNodeId else null
+                            outboundMode = outboundMode,
+                            outboundValue = outboundValue
                         )
                         onConfirm(rule)
                     }
@@ -567,11 +658,11 @@ fun AppRuleEditorDialog(
 }
 
 @Composable
-fun OutboundExplanation(tag: OutboundTag, description: String) {
-    val (icon, color) = when (tag) {
-        OutboundTag.PROXY -> Icons.Rounded.Shield to Color(0xFF4CAF50)
-        OutboundTag.DIRECT -> Icons.Rounded.Public to Color(0xFF2196F3)
-        OutboundTag.BLOCK -> Icons.Rounded.Block to Color(0xFFFF5252)
+fun OutboundExplanation(mode: RuleSetOutboundMode, description: String) {
+    val (icon, color) = when (mode) {
+        RuleSetOutboundMode.PROXY, RuleSetOutboundMode.NODE, RuleSetOutboundMode.PROFILE, RuleSetOutboundMode.GROUP -> Icons.Rounded.Shield to Color(0xFF4CAF50)
+        RuleSetOutboundMode.DIRECT -> Icons.Rounded.Public to Color(0xFF2196F3)
+        RuleSetOutboundMode.BLOCK -> Icons.Rounded.Block to Color(0xFFFF5252)
     }
     
     Row(
@@ -580,147 +671,13 @@ fun OutboundExplanation(tag: OutboundTag, description: String) {
     ) {
         Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(16.dp))
         Text(
-            text = "${tag.displayName}: $description",
+            text = "${mode.displayName}: $description",
             fontSize = 12.sp,
             color = TextSecondary
         )
     }
 }
 
-@Composable
-fun NodePickerDialog(
-    nodes: List<NodeUi>,
-    selectedNodeId: String?,
-    onSelect: (String?) -> Unit,
-    onDismiss: () -> Unit
-) {
-    var tempSelectedId by remember { mutableStateOf(selectedNodeId) }
-    
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(24.dp),
-        containerColor = Neutral800,
-        title = {
-            Text(
-                text = "选择代理节点",
-                fontWeight = FontWeight.Bold,
-                color = TextPrimary
-            )
-        },
-        text = {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(350.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                // 默认节点选项
-                item {
-                    val isSelected = tempSelectedId == null
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(if (isSelected) Color(0xFF4CAF50).copy(alpha = 0.15f) else Color.Transparent)
-                            .clickable { tempSelectedId = null }
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Rounded.Public,
-                            contentDescription = null,
-                            tint = if (isSelected) Color(0xFF4CAF50) else Neutral500,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "默认节点",
-                                fontSize = 14.sp,
-                                color = if (isSelected) TextPrimary else TextSecondary,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                            )
-                            Text(
-                                text = "跟随全局设置",
-                                fontSize = 11.sp,
-                                color = Neutral500
-                            )
-                        }
-                        if (isSelected) {
-                            Icon(
-                                Icons.Rounded.Check,
-                                contentDescription = null,
-                                tint = Color(0xFF4CAF50),
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-                }
-                
-                // 节点列表
-                items(nodes) { node ->
-                    val isSelected = tempSelectedId == node.id
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(if (isSelected) Color(0xFF4CAF50).copy(alpha = 0.15f) else Color.Transparent)
-                            .clickable { tempSelectedId = node.id }
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Rounded.Shield,
-                            contentDescription = null,
-                            tint = if (isSelected) Color(0xFF4CAF50) else Neutral500,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "${node.regionFlag ?: ""} ${node.name}".trim(),
-                                fontSize = 14.sp,
-                                color = if (isSelected) TextPrimary else TextSecondary,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                maxLines = 1
-                            )
-                            Text(
-                                text = node.protocol,
-                                fontSize = 11.sp,
-                                color = Neutral500
-                            )
-                        }
-                        if (isSelected) {
-                            Icon(
-                                Icons.Rounded.Check,
-                                contentDescription = null,
-                                tint = Color(0xFF4CAF50),
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = { onSelect(tempSelectedId) },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF4CAF50),
-                    contentColor = PureWhite
-                ),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Text("确定", fontWeight = FontWeight.Bold)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("取消", color = TextSecondary)
-            }
-        }
-    )
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

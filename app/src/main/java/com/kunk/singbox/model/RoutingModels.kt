@@ -68,8 +68,8 @@ data class AppRule(
     @SerializedName("id") val id: String = UUID.randomUUID().toString(),
     @SerializedName("packageName") val packageName: String, // e.g., "com.google.android.youtube"
     @SerializedName("appName") val appName: String, // Display name, e.g., "YouTube"
-    @SerializedName("outbound") val outbound: OutboundTag, // DIRECT, PROXY, or BLOCK
-    @SerializedName("specificNodeId") val specificNodeId: String? = null, // If set, use this specific node instead of default proxy
+    @SerializedName("outboundMode") val outboundMode: RuleSetOutboundMode? = RuleSetOutboundMode.DIRECT,
+    @SerializedName("outboundValue") val outboundValue: String? = null, // ID for Node/Profile, or Name for Group
     @SerializedName("enabled") val enabled: Boolean = true
 )
 
@@ -78,8 +78,8 @@ data class AppGroup(
     @SerializedName("id") val id: String = UUID.randomUUID().toString(),
     @SerializedName("name") val name: String, // Group name, e.g., "社交应用", "游戏"
     @SerializedName("apps") val apps: List<AppInfo> = emptyList(), // Apps in this group
-    @SerializedName("outbound") val outbound: OutboundTag, // DIRECT, PROXY, or BLOCK
-    @SerializedName("specificNodeId") val specificNodeId: String? = null, // If set, use this specific node
+    @SerializedName("outboundMode") val outboundMode: RuleSetOutboundMode? = RuleSetOutboundMode.DIRECT,
+    @SerializedName("outboundValue") val outboundValue: String? = null, // ID for Node/Profile, or Name for Group
     @SerializedName("enabled") val enabled: Boolean = true
 )
 

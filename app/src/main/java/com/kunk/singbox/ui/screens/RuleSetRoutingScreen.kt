@@ -41,8 +41,8 @@ fun RuleSetRoutingScreen(
     profilesViewModel: ProfilesViewModel = viewModel()
 ) {
     val settings by settingsViewModel.settings.collectAsState()
-    val nodes by nodesViewModel.nodes.collectAsState()
-    val groups by nodesViewModel.nodeGroups.collectAsState()
+    val nodes by nodesViewModel.allNodes.collectAsState()
+    val groups by nodesViewModel.allNodeGroups.collectAsState()
     val profiles by profilesViewModel.profiles.collectAsState()
 
     var editingRuleSet by remember { mutableStateOf<RuleSet?>(null) }
@@ -80,7 +80,10 @@ fun RuleSetRoutingScreen(
                     when (selectedMode) {
                         RuleSetOutboundMode.NODE -> {
                             targetSelectionTitle = "选择节点"
-                            targetOptions = nodes.map { it.name to it.name }
+                            targetOptions = nodes.map { node ->
+                                val profileName = profiles.find { it.id == node.sourceProfileId }?.name ?: "未知"
+                                "${node.name} ($profileName)" to node.id
+                            }
                         }
                         RuleSetOutboundMode.PROFILE -> {
                             targetSelectionTitle = "选择配置"
@@ -243,8 +246,10 @@ fun RuleSetRoutingScreen(
                                     RuleSetOutboundMode.BLOCK -> "拦截"
                                     RuleSetOutboundMode.PROXY -> "代理"
                                     RuleSetOutboundMode.NODE -> {
-                                        val nodeName = ruleSet.outboundValue ?: "未知节点"
-                                        "节点: $nodeName"
+                                        val node = nodes.find { it.id == ruleSet.outboundValue }
+                                        val nodeName = node?.name ?: ruleSet.outboundValue ?: "未知节点"
+                                        val profileName = profiles.find { it.id == node?.sourceProfileId }?.name
+                                        if (node != null && profileName != null) "节点: $nodeName ($profileName)" else "节点: $nodeName"
                                     }
                                     RuleSetOutboundMode.PROFILE -> {
                                         val profileName = profiles.find { it.id == ruleSet.outboundValue }?.name ?: "未知配置"

@@ -68,9 +68,15 @@ class ConfigRepository(private val context: Context) {
     
     private val _nodes = MutableStateFlow<List<NodeUi>>(emptyList())
     val nodes: StateFlow<List<NodeUi>> = _nodes.asStateFlow()
+
+    private val _allNodes = MutableStateFlow<List<NodeUi>>(emptyList())
+    val allNodes: StateFlow<List<NodeUi>> = _allNodes.asStateFlow()
     
     private val _nodeGroups = MutableStateFlow<List<String>>(listOf("全部"))
     val nodeGroups: StateFlow<List<String>> = _nodeGroups.asStateFlow()
+
+    private val _allNodeGroups = MutableStateFlow<List<String>>(emptyList())
+    val allNodeGroups: StateFlow<List<String>> = _allNodeGroups.asStateFlow()
     
     private val _activeProfileId = MutableStateFlow<String?>(null)
     val activeProfileId: StateFlow<String?> = _activeProfileId.asStateFlow()
@@ -142,6 +148,14 @@ class ConfigRepository(private val context: Context) {
         }
     }
     
+    private fun updateAllNodesAndGroups() {
+        val all = profileNodes.values.flatten()
+        _allNodes.value = all
+        
+        val groups = all.map { it.group }.distinct().sorted()
+        _allNodeGroups.value = groups
+    }
+
     private fun loadSavedProfiles() {
         try {
             if (profilesFile.exists()) {
@@ -168,6 +182,8 @@ class ConfigRepository(private val context: Context) {
                         }
                     }
                 }
+                
+                updateAllNodesAndGroups()
                 
                 // 如果有活跃配置，加载其节点
                 _activeProfileId.value?.let { activeId ->
@@ -289,6 +305,7 @@ class ConfigRepository(private val context: Context) {
             // 保存到内存
             cacheConfig(profileId, config)
             profileNodes[profileId] = nodes
+            updateAllNodesAndGroups()
             
             // 更新状态
             _profiles.update { it + profile }
@@ -345,6 +362,7 @@ class ConfigRepository(private val context: Context) {
 
             cacheConfig(profileId, config)
             profileNodes[profileId] = nodes
+            updateAllNodesAndGroups()
 
             _profiles.update { it + profile }
             saveProfiles()
@@ -1151,6 +1169,7 @@ class ConfigRepository(private val context: Context) {
         _profiles.update { list -> list.filter { it.id != profileId } }
         removeCachedConfig(profileId)
         profileNodes.remove(profileId)
+        updateAllNodesAndGroups()
         
         // 删除配置文件
         File(configDir, "$profileId.json").delete()
@@ -1226,6 +1245,7 @@ class ConfigRepository(private val context: Context) {
                 profileNodes[node.sourceProfileId] = profileNodes[node.sourceProfileId]?.map {
                     if (it.id == nodeId) it.copy(latencyMs = if (latency > 0) latency else null) else it
                 } ?: emptyList()
+                updateAllNodesAndGroups()
                 
                 Log.v(TAG, "Latency test result for ${node.name}: ${latency}ms")
                 latency
@@ -1251,6 +1271,7 @@ class ConfigRepository(private val context: Context) {
                 it.copy(latencyMs = null)
             } ?: emptyList()
         }
+        updateAllNodesAndGroups()
     }
 
     suspend fun testAllNodesLatency() = withContext(Dispatchers.IO) {
@@ -1290,6 +1311,7 @@ class ConfigRepository(private val context: Context) {
                 profileNodes[profileId] = profileNodes[profileId]?.map {
                     if (it.id == nodeId) it.copy(latencyMs = if (latency > 0) latency else null) else it
                 } ?: emptyList()
+                updateAllNodesAndGroups()
 
                 Log.v(TAG, "Latency test result for $tag: ${latency}ms")
                 
@@ -1378,6 +1400,7 @@ class ConfigRepository(private val context: Context) {
             
             cacheConfig(profile.id, config)
             profileNodes[profile.id] = nodes
+            updateAllNodesAndGroups()
             
             // 如果是当前活跃配置，更新节点列表
             if (_activeProfileId.value == profile.id) {
@@ -1560,7 +1583,8 @@ class ConfigRepository(private val context: Context) {
     private fun buildCustomRuleSetRules(
         settings: AppSettings,
         defaultProxyTag: String,
-        outbounds: List<Outbound>
+        outbounds: List<Outbound>,
+        nodeTagResolver: (String?) -> String?
     ): List<RouteRule> {
         val rules = mutableListOf<RouteRule>()
 
@@ -1607,14 +1631,12 @@ class ConfigRepository(private val context: Context) {
                 RuleSetOutboundMode.BLOCK -> "block"
                 RuleSetOutboundMode.PROXY -> defaultProxyTag
                 RuleSetOutboundMode.NODE -> {
-                    val nodeName = ruleSet.outboundValue
-                    val found = outbounds.any { it.tag == nodeName }
-                    Log.v(TAG, "NODE mode: nodeName='$nodeName', found=$found")
-                    if (!nodeName.isNullOrEmpty() && found) {
-                        nodeName
+                    val resolvedTag = nodeTagResolver(ruleSet.outboundValue)
+                    if (resolvedTag != null) {
+                         resolvedTag
                     } else {
-                        Log.w(TAG, "Node '$nodeName' not found in outbounds, falling back to $defaultProxyTag")
-                        defaultProxyTag
+                         Log.w(TAG, "Node ID '${ruleSet.outboundValue}' not resolved to any tag, falling back to $defaultProxyTag")
+                         defaultProxyTag
                     }
                 }
                 RuleSetOutboundMode.PROFILE -> {
@@ -1667,23 +1689,31 @@ class ConfigRepository(private val context: Context) {
     private fun buildAppRoutingRules(
         settings: AppSettings,
         defaultProxyTag: String,
-        outbounds: List<Outbound>
+        outbounds: List<Outbound>,
+        nodeTagResolver: (String?) -> String?
     ): List<RouteRule> {
         val rules = mutableListOf<RouteRule>()
         
-        fun resolveOutboundTagForNodeId(nodeId: String?): String? {
-            if (nodeId.isNullOrBlank()) return null
-            val nodeName = _nodes.value.firstOrNull { it.id == nodeId }?.name ?: return null
-            return if (outbounds.any { it.tag == nodeName }) nodeName else null
+        fun resolveOutboundTag(mode: RuleSetOutboundMode?, value: String?): String {
+            return when (mode ?: RuleSetOutboundMode.DIRECT) {
+                RuleSetOutboundMode.DIRECT -> "direct"
+                RuleSetOutboundMode.BLOCK -> "block"
+                RuleSetOutboundMode.PROXY -> defaultProxyTag
+                RuleSetOutboundMode.NODE -> {
+                    val resolvedTag = nodeTagResolver(value)
+                    if (resolvedTag != null) resolvedTag else defaultProxyTag
+                }
+                RuleSetOutboundMode.PROFILE -> defaultProxyTag // Not supported yet
+                RuleSetOutboundMode.GROUP -> {
+                    if (value.isNullOrBlank()) return defaultProxyTag
+                    if (outbounds.any { it.tag == value }) value else defaultProxyTag
+                }
+            }
         }
         
         // 1. 处理应用规则（单个应用）
         settings.appRules.filter { it.enabled }.forEach { rule ->
-            val outboundTag = when (rule.outbound) {
-                OutboundTag.DIRECT -> "direct"
-                OutboundTag.PROXY -> resolveOutboundTagForNodeId(rule.specificNodeId) ?: defaultProxyTag
-                OutboundTag.BLOCK -> "block"
-            }
+            val outboundTag = resolveOutboundTag(rule.outboundMode, rule.outboundValue)
             
             rules.add(RouteRule(
                 packageName = listOf(rule.packageName),
@@ -1695,11 +1725,7 @@ class ConfigRepository(private val context: Context) {
         
         // 2. 处理应用分组
         settings.appGroups.filter { it.enabled }.forEach { group ->
-            val outboundTag = when (group.outbound) {
-                OutboundTag.DIRECT -> "direct"
-                OutboundTag.PROXY -> resolveOutboundTagForNodeId(group.specificNodeId) ?: defaultProxyTag
-                OutboundTag.BLOCK -> "block"
-            }
+            val outboundTag = resolveOutboundTag(group.outboundMode, group.outboundValue)
             
             // 将分组中的所有应用包名添加到一条规则中
             val packageNames = group.apps.map { it.packageName }
@@ -1839,8 +1865,130 @@ class ConfigRepository(private val context: Context) {
         if (fixedOutbounds.none { it.tag == "dns-out" }) {
             fixedOutbounds.add(Outbound(type = "dns", tag = "dns-out"))
         }
+
+        // --- 处理跨配置节点引用 ---
+        val activeProfileId = _activeProfileId.value
+        val allNodes = _allNodes.value
+        val requiredNodeIds = mutableSetOf<String>()
+        val requiredGroupNames = mutableSetOf<String>()
+
+        fun resolveNodeRefToId(value: String?): String? {
+            if (value.isNullOrBlank()) return null
+            if (allNodes.any { it.id == value }) return value
+            val node = if (activeProfileId != null) {
+                allNodes.firstOrNull { it.sourceProfileId == activeProfileId && it.name == value }
+                    ?: allNodes.firstOrNull { it.name == value }
+            } else {
+                allNodes.firstOrNull { it.name == value }
+            }
+            return node?.id
+        }
+
+        // 收集所有规则中引用的节点 ID 和 组名称
+        settings.appRules.filter { it.enabled }.forEach { rule ->
+            if (rule.outboundMode == RuleSetOutboundMode.NODE) resolveNodeRefToId(rule.outboundValue)?.let { requiredNodeIds.add(it) }
+            if (rule.outboundMode == RuleSetOutboundMode.GROUP) rule.outboundValue?.let { requiredGroupNames.add(it) }
+        }
+        settings.appGroups.filter { it.enabled }.forEach { group ->
+            if (group.outboundMode == RuleSetOutboundMode.NODE) resolveNodeRefToId(group.outboundValue)?.let { requiredNodeIds.add(it) }
+            if (group.outboundMode == RuleSetOutboundMode.GROUP) group.outboundValue?.let { requiredGroupNames.add(it) }
+        }
+        settings.ruleSets.filter { it.enabled }.forEach { ruleSet ->
+            if (ruleSet.outboundMode == RuleSetOutboundMode.NODE) resolveNodeRefToId(ruleSet.outboundValue)?.let { requiredNodeIds.add(it) }
+            if (ruleSet.outboundMode == RuleSetOutboundMode.GROUP) ruleSet.outboundValue?.let { requiredGroupNames.add(it) }
+        }
+
+        // 将所需组中的所有节点 ID 也加入到 requiredNodeIds
+        requiredGroupNames.forEach { groupName ->
+            allNodes.filter { it.group == groupName }.forEach { node ->
+                requiredNodeIds.add(node.id)
+            }
+        }
+
+        // 建立 NodeID -> OutboundTag 的映射
+        val nodeTagMap = mutableMapOf<String, String>()
+        val existingTags = fixedOutbounds.map { it.tag }.toMutableSet()
+
+        // 1. 先映射当前配置中的节点
+        if (activeProfileId != null) {
+            allNodes.filter { it.sourceProfileId == activeProfileId }.forEach { node ->
+                if (existingTags.contains(node.name)) {
+                    nodeTagMap[node.id] = node.name
+                }
+            }
+        }
+
+        // 2. 处理需要引入的外部节点
+        requiredNodeIds.forEach { nodeId ->
+            if (nodeTagMap.containsKey(nodeId)) return@forEach // 已经在当前配置中
+
+            val node = allNodes.find { it.id == nodeId } ?: return@forEach
+            val sourceProfileId = node.sourceProfileId
+            
+            // 如果是当前配置但没找到tag(可能改名了?), 跳过
+            if (sourceProfileId == activeProfileId) return@forEach
+
+            // 加载外部配置
+            val sourceConfig = loadConfig(sourceProfileId) ?: return@forEach
+            val sourceOutbound = sourceConfig.outbounds?.find { it.tag == node.name } ?: return@forEach
+            
+            // 运行时修复
+            var fixedSourceOutbound = fixOutboundForRuntime(sourceOutbound)
+            
+            // 处理标签冲突
+            var finalTag = fixedSourceOutbound.tag
+            if (existingTags.contains(finalTag)) {
+                // 冲突，生成新标签: Name_ProfileSuffix
+                val suffix = sourceProfileId.take(4)
+                finalTag = "${finalTag}_$suffix"
+                // 如果还冲突 (极小概率), 再加随机
+                if (existingTags.contains(finalTag)) {
+                    finalTag = "${finalTag}_${java.util.UUID.randomUUID().toString().take(4)}"
+                }
+                fixedSourceOutbound = fixedSourceOutbound.copy(tag = finalTag)
+            }
+            
+            // 添加到 outbounds
+            fixedOutbounds.add(fixedSourceOutbound)
+            existingTags.add(finalTag)
+            nodeTagMap[nodeId] = finalTag
+            
+            Log.d(TAG, "Imported external node: ${node.name} -> $finalTag from profile $sourceProfileId")
+        }
+
+        // 3. 处理需要的节点组 (Merge/Create selectors)
+        requiredGroupNames.forEach { groupName ->
+            val nodesInGroup = allNodes.filter { it.group == groupName }
+            val nodeTags = nodesInGroup.mapNotNull { nodeTagMap[it.id] }
+            
+            if (nodeTags.isNotEmpty()) {
+                val existingIndex = fixedOutbounds.indexOfFirst { it.tag == groupName }
+                if (existingIndex >= 0) {
+                    val existing = fixedOutbounds[existingIndex]
+                    if (existing.type == "selector" || existing.type == "urltest") {
+                        // Merge tags: existing + new (deduplicated)
+                        val combinedTags = ((existing.outbounds ?: emptyList()) + nodeTags).distinct()
+                        fixedOutbounds[existingIndex] = existing.copy(outbounds = combinedTags)
+                        Log.d(TAG, "Updated group '$groupName' with ${combinedTags.size} nodes")
+                    } else {
+                        Log.w(TAG, "Tag collision: '$groupName' is needed as group but exists as ${existing.type}")
+                    }
+                } else {
+                    // Create new selector
+                    val newSelector = Outbound(
+                        type = "selector",
+                        tag = groupName,
+                        outbounds = nodeTags.distinct(),
+                        interruptExistConnections = false
+                    )
+                    // Insert at beginning to ensure visibility/precedence
+                    fixedOutbounds.add(0, newSelector)
+                    Log.d(TAG, "Created synthetic group '$groupName' with ${nodeTags.size} nodes")
+                }
+            }
+        }
         
-        // 收集所有代理节点名称
+        // 收集所有代理节点名称 (包括新添加的外部节点)
         val proxyTags = fixedOutbounds.filter {
             it.type in listOf("vless", "vmess", "trojan", "shadowsocks", "hysteria2", "hysteria", "anytls", "tuic")
         }.map { it.tag }.toMutableList()
@@ -1851,17 +1999,39 @@ class ConfigRepository(private val context: Context) {
             type = "selector",
             tag = selectorTag,
             outbounds = proxyTags,
-            default = activeNode?.name, // 设置默认选中项
+            default = activeNode?.let { nodeTagMap[it.id] ?: it.name }, // 设置默认选中项
             interruptExistConnections = true // 切换节点时断开现有连接，确保立即生效
         )
         
+        // 避免重复 tag：订阅配置通常已自带 PROXY selector
+        // 若已存在同 tag outbound，直接替换（并删除多余重复项）
+        val existingProxyIndexes = fixedOutbounds.withIndex()
+            .filter { it.value.tag == selectorTag }
+            .map { it.index }
+        if (existingProxyIndexes.isNotEmpty()) {
+            existingProxyIndexes.asReversed().forEach { idx ->
+                fixedOutbounds.removeAt(idx)
+            }
+        }
+
         // 将 Selector 添加到 outbounds 列表的最前面（或者合适的位置）
         fixedOutbounds.add(0, selectorOutbound)
         
         Log.d(TAG, "Created selector '$selectorTag' with ${proxyTags.size} nodes. Default: ${activeNode?.name}")
         
+        // 定义节点标签解析器
+        val nodeTagResolver: (String?) -> String? = { value ->
+            if (value.isNullOrBlank()) {
+                null
+            } else {
+                nodeTagMap[value]
+                    ?: resolveNodeRefToId(value)?.let { nodeTagMap[it] }
+                    ?: if (fixedOutbounds.any { it.tag == value }) value else null
+            }
+        }
+
         // 构建应用分流规则
-        val appRoutingRules = buildAppRoutingRules(settings, selectorTag, fixedOutbounds)
+        val appRoutingRules = buildAppRoutingRules(settings, selectorTag, fixedOutbounds, nodeTagResolver)
         
         // 构建广告拦截规则和规则集
         val adBlockRules = if (settings.blockAds) {
@@ -1878,7 +2048,7 @@ class ConfigRepository(private val context: Context) {
 
         // 构建自定义规则集配置和路由规则
         val customRuleSets = buildCustomRuleSets(settings)
-        val customRuleSetRules = buildCustomRuleSetRules(settings, selectorTag, fixedOutbounds)
+        val customRuleSetRules = buildCustomRuleSetRules(settings, selectorTag, fixedOutbounds, nodeTagResolver)
         
         // 添加路由配置（使用在线规则集，sing-box 1.12.0+）
         // 合并规则集时去重，以 customRuleSets 为准（用户配置优先）
@@ -1972,6 +2142,7 @@ class ConfigRepository(private val context: Context) {
         // 重新提取节点列表
         val newNodes = extractNodesFromConfig(newConfig, profileId)
         profileNodes[profileId] = newNodes
+        updateAllNodesAndGroups()
 
         // 保存文件
         try {
@@ -2015,6 +2186,7 @@ class ConfigRepository(private val context: Context) {
         // 重新提取节点列表
         val newNodes = extractNodesFromConfig(newConfig, profileId)
         profileNodes[profileId] = newNodes
+        updateAllNodesAndGroups()
 
         // 保存文件
         try {
@@ -2062,6 +2234,7 @@ class ConfigRepository(private val context: Context) {
         // 重新提取节点列表
         val newNodes = extractNodesFromConfig(newConfig, profileId)
         profileNodes[profileId] = newNodes
+        updateAllNodesAndGroups()
 
         // 保存文件
         try {

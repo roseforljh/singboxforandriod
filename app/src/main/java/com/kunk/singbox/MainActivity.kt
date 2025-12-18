@@ -183,6 +183,7 @@ fun SingBoxApp() {
                             Surface(
                                 modifier = Modifier
                                     .padding(horizontal = 12.dp)
+                                    .heightIn(min = 52.dp)
                                     .shadow(6.dp, RoundedCornerShape(12.dp)),
                                 color = PureWhite,
                                 contentColor = Color.Black,
@@ -191,7 +192,7 @@ fun SingBoxApp() {
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(

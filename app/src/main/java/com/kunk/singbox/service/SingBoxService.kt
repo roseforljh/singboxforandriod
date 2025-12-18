@@ -131,8 +131,10 @@ class SingBoxService : VpnService() {
     private var vpnInterface: ParcelFileDescriptor? = null
     private var boxService: BoxService? = null
     private var currentSettings: AppSettings? = null
-    private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private val cleanupScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val serviceSupervisorJob = SupervisorJob()
+    private val serviceScope = CoroutineScope(Dispatchers.IO + serviceSupervisorJob)
+    private val cleanupSupervisorJob = SupervisorJob()
+    private val cleanupScope = CoroutineScope(Dispatchers.IO + cleanupSupervisorJob)
     @Volatile private var isStopping: Boolean = false
     @Volatile private var stopSelfRequested: Boolean = false
     @Volatile private var pendingStartConfigPath: String? = null
@@ -235,18 +237,23 @@ class SingBoxService : VpnService() {
                     }
                     VpnAppMode.ALLOWLIST -> {
                         if (allowPkgs.isEmpty()) {
-                            // avoid a VPN that captures nothing
+                            Log.w(TAG, "Allowlist is empty, falling back to ALL mode (excluding self)")
                             builder.addDisallowedApplication(packageName)
                         } else {
+                            var addedCount = 0
                             allowPkgs.forEach { pkg ->
                                 if (pkg == packageName) return@forEach
                                 try {
                                     builder.addAllowedApplication(pkg)
+                                    addedCount++
                                 } catch (e: PackageManager.NameNotFoundException) {
                                     Log.w(TAG, "Allowed app not found: $pkg")
                                 }
                             }
-                            // In allowlist mode, self is excluded by not being in allowlist.
+                            if (addedCount == 0) {
+                                Log.w(TAG, "No valid apps in allowlist, falling back to ALL mode")
+                                builder.addDisallowedApplication(packageName)
+                            }
                         }
                     }
                     VpnAppMode.BLOCKLIST -> {
@@ -903,7 +910,8 @@ class SingBoxService : VpnService() {
     
     override fun onDestroy() {
         stopVpn(stopService = false)
-        serviceScope.cancel()
+        serviceSupervisorJob.cancel()
+        cleanupSupervisorJob.cancel()
         super.onDestroy()
     }
      

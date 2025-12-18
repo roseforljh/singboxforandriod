@@ -72,6 +72,7 @@ fun ProfilesScreen(
     val profiles by viewModel.profiles.collectAsState()
     val activeProfileId by viewModel.activeProfileId.collectAsState()
     val importState by viewModel.importState.collectAsState()
+    val updateStatus by viewModel.updateStatus.collectAsState()
     
     var showSearchDialog by remember { mutableStateOf(false) }
     var showImportSelection by remember { mutableStateOf(false) }
@@ -80,6 +81,13 @@ fun ProfilesScreen(
     
     val context = LocalContext.current
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+
+    // Handle update state feedback
+    androidx.compose.runtime.LaunchedEffect(updateStatus) {
+        updateStatus?.let {
+            Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
+        }
+    }
 
     // Handle import state feedback
     androidx.compose.runtime.LaunchedEffect(importState) {

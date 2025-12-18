@@ -14,6 +14,9 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -64,6 +67,8 @@ class ConfigRepository(private val context: Context) {
         .followRedirects(true)
         .followSslRedirects(true)
         .build()
+    
+    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     
     private val _profiles = MutableStateFlow<List<ProfileUi>>(emptyList())
     val profiles: StateFlow<List<ProfileUi>> = _profiles.asStateFlow()
@@ -848,7 +853,7 @@ class ConfigRepository(private val context: Context) {
                 transport = transport
             )
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "Failed to parse trojan link", e)
         }
         return null
     }
@@ -860,7 +865,7 @@ class ConfigRepository(private val context: Context) {
             val name = java.net.URLDecoder.decode(uri.fragment ?: "Hysteria2 Node", "UTF-8")
             val password = uri.userInfo
             val server = uri.host
-            val port = uri.port
+            val port = if (uri.port == -1) 443 else uri.port
             
             val params = mutableMapOf<String, String>()
             uri.query?.split("&")?.forEach { param ->
@@ -889,7 +894,7 @@ class ConfigRepository(private val context: Context) {
                 }
             )
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "Failed to parse hysteria2 link", e)
         }
         return null
     }
@@ -899,7 +904,7 @@ class ConfigRepository(private val context: Context) {
             val uri = java.net.URI(link)
             val name = java.net.URLDecoder.decode(uri.fragment ?: "Hysteria Node", "UTF-8")
             val server = uri.host
-            val port = uri.port
+            val port = if (uri.port == -1) 443 else uri.port
             
             val params = mutableMapOf<String, String>()
             uri.query?.split("&")?.forEach { param ->
@@ -926,7 +931,7 @@ class ConfigRepository(private val context: Context) {
                 obfs = params["obfs"]?.let { ObfsConfig(type = it) }
             )
         } catch (e: Exception) {
-            e.printStackTrace()
+            Log.e(TAG, "Failed to parse hysteria link", e)
         }
         return null
     }
@@ -1100,32 +1105,41 @@ class ConfigRepository(private val context: Context) {
     
     /**
      * 根据节点名称检测地区标志
+     * 使用词边界匹配，避免 "us" 匹配 "music" 等误报
      */
     private fun detectRegionFlag(name: String): String {
         val lowerName = name.lowercase()
+        
+        fun matchWord(vararg words: String): Boolean {
+            return words.any { word ->
+                val regex = Regex("(^|[^a-z])${Regex.escape(word)}([^a-z]|$)")
+                regex.containsMatchIn(lowerName)
+            }
+        }
+        
         return when {
-            lowerName.contains("香港") || lowerName.contains("hk") || lowerName.contains("hong") -> "🇭🇰"
-            lowerName.contains("台湾") || lowerName.contains("tw") || lowerName.contains("taiwan") -> "🇹🇼"
-            lowerName.contains("日本") || lowerName.contains("jp") || lowerName.contains("japan") || lowerName.contains("tokyo") -> "🇯🇵"
-            lowerName.contains("新加坡") || lowerName.contains("sg") || lowerName.contains("singapore") -> "🇸🇬"
-            lowerName.contains("美国") || lowerName.contains("us") || lowerName.contains("united states") || lowerName.contains("america") -> "🇺🇸"
-            lowerName.contains("韩国") || lowerName.contains("kr") || lowerName.contains("korea") -> "🇰🇷"
-            lowerName.contains("英国") || lowerName.contains("uk") || lowerName.contains("britain") -> "🇬🇧"
-            lowerName.contains("德国") || lowerName.contains("de") || lowerName.contains("germany") -> "🇩🇪"
-            lowerName.contains("法国") || lowerName.contains("fr") || lowerName.contains("france") -> "🇫🇷"
-            lowerName.contains("加拿大") || lowerName.contains("ca") || lowerName.contains("canada") -> "🇨🇦"
-            lowerName.contains("澳大利亚") || lowerName.contains("au") || lowerName.contains("australia") -> "🇦🇺"
-            lowerName.contains("俄罗斯") || lowerName.contains("ru") || lowerName.contains("russia") -> "🇷🇺"
-            lowerName.contains("印度") || lowerName.contains("in") || lowerName.contains("india") -> "🇮🇳"
-            lowerName.contains("巴西") || lowerName.contains("br") || lowerName.contains("brazil") -> "🇧🇷"
-            lowerName.contains("荷兰") || lowerName.contains("nl") || lowerName.contains("netherlands") -> "🇳🇱"
-            lowerName.contains("土耳其") || lowerName.contains("tr") || lowerName.contains("turkey") -> "🇹🇷"
-            lowerName.contains("阿根廷") || lowerName.contains("ar") || lowerName.contains("argentina") -> "🇦🇷"
-            lowerName.contains("马来西亚") || lowerName.contains("my") || lowerName.contains("malaysia") -> "🇲🇾"
-            lowerName.contains("泰国") || lowerName.contains("th") || lowerName.contains("thailand") -> "🇹🇭"
-            lowerName.contains("越南") || lowerName.contains("vn") || lowerName.contains("vietnam") -> "🇻🇳"
-            lowerName.contains("菲律宾") || lowerName.contains("ph") || lowerName.contains("philippines") -> "🇵🇭"
-            lowerName.contains("印尼") || lowerName.contains("id") || lowerName.contains("indonesia") -> "🇮🇩"
+            lowerName.contains("香港") || matchWord("hk") || lowerName.contains("hong kong") -> "🇭🇰"
+            lowerName.contains("台湾") || matchWord("tw") || lowerName.contains("taiwan") -> "🇹🇼"
+            lowerName.contains("日本") || matchWord("jp") || lowerName.contains("japan") || lowerName.contains("tokyo") -> "🇯🇵"
+            lowerName.contains("新加坡") || matchWord("sg") || lowerName.contains("singapore") -> "🇸🇬"
+            lowerName.contains("美国") || matchWord("us", "usa") || lowerName.contains("united states") || lowerName.contains("america") -> "🇺🇸"
+            lowerName.contains("韩国") || matchWord("kr") || lowerName.contains("korea") -> "🇰🇷"
+            lowerName.contains("英国") || matchWord("uk", "gb") || lowerName.contains("britain") || lowerName.contains("england") -> "🇬🇧"
+            lowerName.contains("德国") || matchWord("de") || lowerName.contains("germany") -> "🇩🇪"
+            lowerName.contains("法国") || matchWord("fr") || lowerName.contains("france") -> "🇫🇷"
+            lowerName.contains("加拿大") || matchWord("ca") || lowerName.contains("canada") -> "🇨🇦"
+            lowerName.contains("澳大利亚") || matchWord("au") || lowerName.contains("australia") -> "🇦🇺"
+            lowerName.contains("俄罗斯") || matchWord("ru") || lowerName.contains("russia") -> "🇷🇺"
+            lowerName.contains("印度") || matchWord("in") || lowerName.contains("india") -> "🇮🇳"
+            lowerName.contains("巴西") || matchWord("br") || lowerName.contains("brazil") -> "🇧🇷"
+            lowerName.contains("荷兰") || matchWord("nl") || lowerName.contains("netherlands") -> "🇳🇱"
+            lowerName.contains("土耳其") || matchWord("tr") || lowerName.contains("turkey") -> "🇹🇷"
+            lowerName.contains("阿根廷") || matchWord("ar") || lowerName.contains("argentina") -> "🇦🇷"
+            lowerName.contains("马来西亚") || matchWord("my") || lowerName.contains("malaysia") -> "🇲🇾"
+            lowerName.contains("泰国") || matchWord("th") || lowerName.contains("thailand") -> "🇹🇭"
+            lowerName.contains("越南") || matchWord("vn") || lowerName.contains("vietnam") -> "🇻🇳"
+            lowerName.contains("菲律宾") || matchWord("ph") || lowerName.contains("philippines") -> "🇵🇭"
+            lowerName.contains("印尼") || matchWord("id") || lowerName.contains("indonesia") -> "🇮🇩"
             else -> "🌐"
         }
     }
@@ -1154,8 +1168,8 @@ class ConfigRepository(private val context: Context) {
     }
 
     suspend fun setActiveNode(nodeId: String): Boolean {
-        return setActiveNodeWithResult(nodeId) is NodeSwitchResult.Success || 
-               setActiveNodeWithResult(nodeId) is NodeSwitchResult.NotRunning
+        val result = setActiveNodeWithResult(nodeId)
+        return result is NodeSwitchResult.Success || result is NodeSwitchResult.NotRunning
     }
 
     suspend fun setActiveNodeWithResult(nodeId: String): NodeSwitchResult {
@@ -1340,7 +1354,7 @@ class ConfigRepository(private val context: Context) {
 
     suspend fun testAllNodesLatency() = withContext(Dispatchers.IO) {
         val nodes = _nodes.value
-        Log.v(TAG, "Starting latency test for ${nodes.size} nodes")
+        Log.d(TAG, "Starting latency test for ${nodes.size} nodes")
 
         data class NodeTestInfo(
             val outbound: Outbound,
@@ -1354,44 +1368,34 @@ class ConfigRepository(private val context: Context) {
             NodeTestInfo(fixOutboundForRuntime(outbound), node.id, node.sourceProfileId)
         }
 
-        val parallelism = 5
-        val semaphore = kotlinx.coroutines.sync.Semaphore(parallelism)
-        val updateLock = Any()
+        if (testInfoList.isEmpty()) {
+            Log.w(TAG, "No valid nodes to test")
+            return@withContext
+        }
 
-        val jobs = testInfoList.map { info ->
-            async {
-                semaphore.acquire()
-                try {
-                    val latency = singBoxCore.testOutboundLatency(info.outbound)
-                    
-                    synchronized(updateLock) {
-                        _nodes.update { list ->
-                            list.map {
-                                if (it.id == info.nodeId) it.copy(latencyMs = if (latency > 0) latency else null) else it
-                            }
-                        }
+        val outbounds = testInfoList.map { it.outbound }
+        val tagToInfo = testInfoList.associateBy { it.outbound.tag }
 
-                        profileNodes[info.profileId] = profileNodes[info.profileId]?.map {
-                            if (it.id == info.nodeId) it.copy(latencyMs = if (latency > 0) latency else null) else it
-                        } ?: emptyList()
-                        updateLatencyInAllNodes(info.nodeId, latency)
-                    }
-
-                    Log.v(TAG, "Latency test result for ${info.outbound.tag}: ${latency}ms")
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to test latency for ${info.outbound.tag}", e)
-                } finally {
-                    semaphore.release()
+        singBoxCore.testOutboundsLatency(outbounds) { tag, latency ->
+            val info = tagToInfo[tag] ?: return@testOutboundsLatency
+            val latencyValue = if (latency > 0) latency else null
+            
+            _nodes.update { list ->
+                list.map {
+                    if (it.id == info.nodeId) it.copy(latencyMs = latencyValue) else it
                 }
             }
+
+            profileNodes[info.profileId] = profileNodes[info.profileId]?.map {
+                if (it.id == info.nodeId) it.copy(latencyMs = latencyValue) else it
+            } ?: emptyList()
+            
+            updateLatencyInAllNodes(info.nodeId, latency)
+
+            Log.d(TAG, "Latency: ${info.outbound.tag} = ${latency}ms")
         }
 
-        jobs.awaitAll()
-        Log.v(TAG, "Latency test completed for all nodes")
-
-        if (!SingBoxService.isRunning) {
-            singBoxCore.stopTestService()
-        }
+        Log.d(TAG, "Latency test completed for all nodes")
     }
 
     suspend fun updateAllProfiles(): BatchUpdateResult {
@@ -1430,40 +1434,33 @@ class ConfigRepository(private val context: Context) {
             }
         }
         
-        return try {
-            val result = importFromSubscriptionUpdate(profile)
-            _profiles.update { list ->
-                list.map {
-                    if (it.id == profileId) it.copy(
-                        updateStatus = UpdateStatus.Success,
-                        lastUpdated = System.currentTimeMillis()
-                    ) else it
-                }
-            }
-            
-            // 延迟后重置状态
-            kotlinx.coroutines.delay(2000)
-            _profiles.update { list ->
-                list.map {
-                    if (it.id == profileId) it.copy(updateStatus = UpdateStatus.Idle) else it
-                }
-            }
-            
-            result
+        val result = try {
+            importFromSubscriptionUpdate(profile)
         } catch (e: Exception) {
-            _profiles.update { list ->
-                list.map {
-                    if (it.id == profileId) it.copy(updateStatus = UpdateStatus.Failed) else it
-                }
-            }
-            kotlinx.coroutines.delay(2000)
-            _profiles.update { list ->
-                list.map {
-                    if (it.id == profileId) it.copy(updateStatus = UpdateStatus.Idle) else it
-                }
-            }
             SubscriptionUpdateResult.Failed(profile.name, e.message ?: "未知错误")
         }
+
+        // 更新状态为 Success/Failed
+        _profiles.update { list ->
+            list.map {
+                if (it.id == profileId) it.copy(
+                    updateStatus = if (result is SubscriptionUpdateResult.Failed) UpdateStatus.Failed else UpdateStatus.Success,
+                    lastUpdated = if (result is SubscriptionUpdateResult.Failed) it.lastUpdated else System.currentTimeMillis()
+                ) else it
+            }
+        }
+
+        // 异步延迟重置状态，不阻塞当前方法返回
+        scope.launch {
+            kotlinx.coroutines.delay(2000)
+            _profiles.update { list ->
+                list.map {
+                    if (it.id == profileId) it.copy(updateStatus = UpdateStatus.Idle) else it
+                }
+            }
+        }
+        
+        return result
     }
     
     private suspend fun importFromSubscriptionUpdate(profile: ProfileUi): SubscriptionUpdateResult = withContext(Dispatchers.IO) {

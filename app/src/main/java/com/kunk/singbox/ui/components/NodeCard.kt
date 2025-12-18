@@ -124,54 +124,74 @@ fun NodeCard(
                 }
             }
 
-            IconButton(
-                onClick = { showMenu = true },
-                modifier = Modifier.size(32.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.MoreVert,
-                    contentDescription = "More",
-                    tint = TextSecondary,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-            
-            if (showMenu) {
-                DropdownMenu(
-                    expanded = showMenu,
-                    onDismissRequest = { showMenu = false },
-                    modifier = Modifier
-                        .background(Neutral700)
-                        .width(120.dp)
+            Box(modifier = Modifier.wrapContentSize(Alignment.TopStart)) {
+                IconButton(
+                    onClick = { showMenu = true },
+                    modifier = Modifier.size(32.dp)
                 ) {
-                    DropdownMenuItem(
-                        text = { Text("编辑", color = PureWhite) },
-                        onClick = {
-                            showMenu = false
-                            onEdit()
-                        }
+                    Icon(
+                        imageVector = Icons.Rounded.MoreVert,
+                        contentDescription = "More",
+                        tint = TextSecondary,
+                        modifier = Modifier.size(20.dp)
                     )
-                    DropdownMenuItem(
-                        text = { Text("导出", color = PureWhite) },
-                        onClick = {
-                            showMenu = false
-                            onExport()
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("延迟", color = PureWhite) },
-                        onClick = {
-                            showMenu = false
-                            onLatency()
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("删除", color = Color.Red) },
-                        onClick = {
-                            showMenu = false
-                            onDelete()
-                        }
-                    )
+                }
+
+                MaterialTheme(
+                    shapes = MaterialTheme.shapes.copy(extraSmall = RoundedCornerShape(12.dp))
+                ) {
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false },
+                        modifier = Modifier
+                            .background(Neutral700)
+                            .width(100.dp)
+                    ) {
+                        DropdownMenuItem(
+                            text = {
+                                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                    Text("编辑", color = PureWhite)
+                                }
+                            },
+                            onClick = {
+                                showMenu = false
+                                onEdit()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                    Text("导出", color = PureWhite)
+                                }
+                            },
+                            onClick = {
+                                showMenu = false
+                                onExport()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                    Text("延迟", color = PureWhite)
+                                }
+                            },
+                            onClick = {
+                                showMenu = false
+                                onLatency()
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                                    Text("删除", color = PureWhite)
+                                }
+                            },
+                            onClick = {
+                                showMenu = false
+                                onDelete()
+                            }
+                        )
+                    }
                 }
             }
         }

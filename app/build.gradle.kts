@@ -27,8 +27,8 @@ android {
 
         resConfigs("zh", "en") // 仅保留中文和英文资源，减少体积
         
-        // 过滤 AAR 中的 native 库，只保留 arm64-v8a 架构
-        // libbox.aar 包含 4 个架构(arm64-v8a, armeabi-v7a, x86, x86_64)，每个约 10MB+
+        // 过滤 AAR 中的 native 库，仅保留 64 位架构 (arm64-v8a, x86_64)
+        // libbox.aar 包含 4 个架构，每个约 10MB+，移除 32 位架构可显著减小 APK 体积
         ndk {
             abiFilters += listOf("arm64-v8a")
         }

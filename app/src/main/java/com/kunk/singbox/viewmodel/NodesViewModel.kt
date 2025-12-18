@@ -121,20 +121,11 @@ class NodesViewModel(application: Application) : AndroidViewModel(application) {
         
         testingJob = viewModelScope.launch {
             _isTesting.value = true
-            val nodeList = nodes.value
             try {
-                for (node in nodeList) {
-                    // 检查协程是否已被取消
-                    if (!isActive) break
-                    
-                    // 只标记当前正在测试的节点
-                    _testingNodeIds.value = setOf(node.id)
-                    try {
-                        configRepository.testNodeLatency(node.id)
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
-                }
+                // 使用 ConfigRepository 的批量测试功能，它已经在内部实现了并行化
+                configRepository.testAllNodesLatency()
+            } catch (e: Exception) {
+                e.printStackTrace()
             } finally {
                 _isTesting.value = false
                 _testingNodeIds.value = emptySet()

@@ -14,9 +14,15 @@ import io.nekohasekai.libbox.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import java.io.File
 import java.net.NetworkInterface
 import java.net.ServerSocket
@@ -175,10 +181,21 @@ class SingBoxCore private constructor(private val context: Context) {
                 clashApiClient.setBaseUrl("http://127.0.0.1:9090")
             }
 
-            for (outbound in outbounds) {
-                val latency = testOutboundLatencyWithClashApi(outbound)
-                onResult(outbound.tag, latency)
+            val semaphore = kotlinx.coroutines.sync.Semaphore(permits = 4)
+            val jobs = outbounds.map { outbound ->
+                async {
+                    semaphore.withPermit {
+                        try {
+                            val latency = testOutboundLatencyWithClashApi(outbound)
+                            onResult(outbound.tag, latency)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Latency test failed for ${outbound.tag}", e)
+                            onResult(outbound.tag, -1L)
+                        }
+                    }
+                }
             }
+            jobs.awaitAll()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start test service", e)
             outbounds.forEach { onResult(it.tag, -1L) }
@@ -193,7 +210,7 @@ class SingBoxCore private constructor(private val context: Context) {
      * 确保测试服务正在运行，如果已运行则检查是否需要更新配置
      */
     private suspend fun ensureTestServiceRunning(outbounds: List<Outbound>) {
-        synchronized(serviceLock) {
+        val needStart = synchronized(serviceLock) {
             val newTags = outbounds.map { it.tag }.toSet()
             
             // 检查是否需要重启服务（新节点不在当前配置中）
@@ -204,17 +221,20 @@ class SingBoxCore private constructor(private val context: Context) {
                 Log.v(TAG, "Reusing existing test service")
                 testServiceStartTime = System.currentTimeMillis()
                 scheduleServiceShutdown()
-                return
+                return@synchronized false
             }
             
             if (needRestart) {
                 Log.d(TAG, "Restarting test service with new nodes")
                 stopTestServiceInternal()
             }
+            true
         }
         
-        // 启动新服务
-        startTestServiceWithKeepAlive(outbounds)
+        // 启动新服务（在锁外执行，避免持锁时间过长）
+        if (needStart) {
+            startTestServiceWithKeepAlive(outbounds)
+        }
     }
     
     /**
@@ -271,7 +291,8 @@ class SingBoxCore private constructor(private val context: Context) {
         scheduleServiceShutdown()
     }
     
-    private val keepAliveScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val keepAliveSupervisorJob = SupervisorJob()
+    private val keepAliveScope = CoroutineScope(Dispatchers.IO + keepAliveSupervisorJob)
 
     private fun scheduleServiceShutdown() {
         keepAliveJob?.cancel()
@@ -378,9 +399,30 @@ class SingBoxCore private constructor(private val context: Context) {
     }
 
     private fun allocateLocalPort(): Int {
-        ServerSocket(0).use { socket ->
-            socket.reuseAddress = true
-            return socket.localPort
+        var attempts = 0
+        val maxAttempts = 10
+        while (attempts < maxAttempts) {
+            try {
+                val socket = ServerSocket(0)
+                socket.reuseAddress = true
+                val port = socket.localPort
+                socket.close()
+                if (isPortAvailable(port)) {
+                    return port
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Port allocation attempt $attempts failed", e)
+            }
+            attempts++
+        }
+        throw RuntimeException("Failed to allocate local port after $maxAttempts attempts")
+    }
+    
+    private fun isPortAvailable(port: Int): Boolean {
+        return try {
+            ServerSocket(port).use { true }
+        } catch (e: Exception) {
+            false
         }
     }
 
@@ -388,29 +430,34 @@ class SingBoxCore private constructor(private val context: Context) {
      * 校准基准延迟（测量非网络开销）
      * 通过测试 direct 出站访问本地 Clash API 的响应时间
      */
+    private val baselineMutex = Mutex()
     private suspend fun calibrateBaseline() {
         if (baselineCalibrated) return
         
-        try {
-            // 测试 direct 出站访问本地 Clash API 的延迟作为基准
-            val startTime = System.currentTimeMillis()
-            val available = clashApiClient.isAvailable()
-            val elapsed = System.currentTimeMillis() - startTime
+        baselineMutex.withLock {
+            if (baselineCalibrated) return@withLock
             
-            if (available) {
-                // 多次测量取平均值
-                var totalTime = elapsed
-                repeat(2) {
-                    val t1 = System.currentTimeMillis()
-                    clashApiClient.isAvailable()
-                    totalTime += System.currentTimeMillis() - t1
+            try {
+                // 测试 direct 出站访问本地 Clash API 的延迟作为基准
+                val startTime = System.currentTimeMillis()
+                val available = clashApiClient.isAvailable()
+                val elapsed = System.currentTimeMillis() - startTime
+                
+                if (available) {
+                    // 多次测量取平均值
+                    var totalTime = elapsed
+                    repeat(2) {
+                        val t1 = System.currentTimeMillis()
+                        clashApiClient.isAvailable()
+                        totalTime += System.currentTimeMillis() - t1
+                    }
+                    baselineLatency = totalTime / 3
+                    baselineCalibrated = true
+                    Log.v(TAG, "Baseline latency calibrated: ${baselineLatency}ms")
                 }
-                baselineLatency = totalTime / 3
-                baselineCalibrated = true
-                Log.v(TAG, "Baseline latency calibrated: ${baselineLatency}ms")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to calibrate baseline", e)
             }
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to calibrate baseline", e)
         }
     }
     
@@ -616,5 +663,14 @@ class SingBoxCore private constructor(private val context: Context) {
         override fun hasNext(): Boolean = index < list.size
         override fun next(): String = list[index++]
         override fun len(): Int = list.size
+    }
+    
+    fun cleanup() {
+        synchronized(serviceLock) {
+            keepAliveJob?.cancel()
+            keepAliveJob = null
+            keepAliveSupervisorJob.cancel()
+            stopTestServiceInternal()
+        }
     }
 }

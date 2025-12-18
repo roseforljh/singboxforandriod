@@ -272,12 +272,24 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 context.startForegroundService(intent)
                 
-                // 等待服务启动
-                delay(2000)
-                if (SingBoxService.isRunning) {
-                    _connectionState.value = ConnectionState.Connected
-                    startTrafficMonitor()
-                } else {
+                // 等待服务启动，使用轮询检查而非固定延时
+                val startTime = System.currentTimeMillis()
+                val maxWaitMs = 10_000L
+                val checkIntervalMs = 200L
+                
+                while (System.currentTimeMillis() - startTime < maxWaitMs) {
+                    if (SingBoxService.isRunning) {
+                        _connectionState.value = ConnectionState.Connected
+                        startTrafficMonitor()
+                        return@launch
+                    }
+                    if (!SingBoxService.isStarting) {
+                        break
+                    }
+                    delay(checkIntervalMs)
+                }
+                
+                if (!SingBoxService.isRunning) {
                     _connectionState.value = ConnectionState.Error
                 }
             } catch (e: Exception) {

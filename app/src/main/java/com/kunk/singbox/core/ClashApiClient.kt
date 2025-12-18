@@ -45,6 +45,10 @@ class ClashApiClient(
     fun getBaseUrl(): String = baseUrl
 
     private val client = OkHttpClient.Builder()
+        .dispatcher(okhttp3.Dispatcher().apply {
+            maxRequests = 100
+            maxRequestsPerHost = 100
+        })
         .connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(5, TimeUnit.SECONDS)
         .writeTimeout(5, TimeUnit.SECONDS)

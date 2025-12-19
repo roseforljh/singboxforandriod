@@ -15,6 +15,7 @@ build/
 *.keystore
 signing.properties
 keystore.properties
+keystore_base64.txt
 
 # 临时文件和解压目录
 temp_aar_extracted/

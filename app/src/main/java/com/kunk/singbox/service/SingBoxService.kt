@@ -155,60 +155,10 @@ class SingBoxService : VpnService() {
     @Volatile private var pendingStartConfigPath: String? = null
     @Volatile private var connectionOwnerPermissionDeniedLogged = false
 
-    private val watchdogJob = SupervisorJob()
-    private val watchdogScope = CoroutineScope(Dispatchers.IO + watchdogJob)
-    private var healthCheckJob: Job? = null
-
     @Volatile private var lastRuleSetCheckMs: Long = 0L
     private val ruleSetCheckIntervalMs: Long = 6 * 60 * 60 * 1000L
 
     // Auto reconnect
-    private var autoReconnectEnabled: Boolean = false
-    private var lastAutoReconnectAttemptMs: Long = 0L
-    private val autoReconnectDebounceMs: Long = 5000L
-    private var autoReconnectJob: Job? = null
-
-    private fun startHealthCheck() {
-        stopHealthCheck()
-        healthCheckJob = watchdogScope.launch {
-            var failureCount = 0
-            while (isActive) {
-                delay(15000) // Check every 15 seconds
-                if (isRunning && boxService != null) {
-                    try {
-                        val clashApi = SingBoxCore.getInstance(this@SingBoxService).getClashApiClient()
-                        val isAlive = withTimeoutOrNull(3000) {
-                            clashApi.isAvailable()
-                        } ?: false
-                        
-                        if (isAlive) {
-                            failureCount = 0
-                        } else {
-                            failureCount++
-                            Log.w(TAG, "Health check: Clash API not responding (failure count: $failureCount)")
-                        }
-
-                        if (failureCount >= 3) {
-                            Log.e(TAG, "Health check failed 3 times, restarting VPN")
-                            failureCount = 0
-                            withContext(Dispatchers.Main) {
-                                lastConfigPath?.let { startVpn(it) }
-                            }
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Health check error", e)
-                    }
-                }
-            }
-        }
-    }
-
-    private fun stopHealthCheck() {
-        healthCheckJob?.cancel()
-        healthCheckJob = null
-    }
-    
-    // Network monitoring
     private var connectivityManager: ConnectivityManager? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var currentInterfaceListener: InterfaceUpdateListener? = null
@@ -661,6 +611,16 @@ class SingBoxService : VpnService() {
                 setUnderlyingNetworks(arrayOf(network))
                 lastKnownNetwork = network
                 Log.i(TAG, "Switched underlying network to $network")
+                
+                // Notify the core to reset its network stack and re-bind sockets
+                serviceScope.launch {
+                    try {
+                        boxService?.resetNetwork()
+                        Log.d(TAG, "Core network stack reset triggered")
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to reset core network stack", e)
+                    }
+                }
             }
 
             val linkProperties = connectivityManager?.getLinkProperties(network)
@@ -857,7 +817,6 @@ class SingBoxService : VpnService() {
                 setLastError(null)
                 Log.i(TAG, "SingBox VPN started successfully")
                 updateTileState()
-                startHealthCheck()
                 
             } catch (e: Exception) {
                 val reason = "Failed to start VPN: ${e.javaClass.simpleName}: ${e.message}"

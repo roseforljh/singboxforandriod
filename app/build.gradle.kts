@@ -44,13 +44,35 @@ android {
                 storePassword = props.getProperty("KEYSTORE_PASSWORD")
                 keyAlias = props.getProperty("KEY_ALIAS")
                 keyPassword = props.getProperty("KEY_PASSWORD")
+            } else {
+                // CI 环境：从环境变量读取签名配置
+                val keystorePath = System.getenv("KEYSTORE_PATH")
+                val keystorePassword = System.getenv("KEYSTORE_PASSWORD")
+                val keyAliasEnv = System.getenv("KEY_ALIAS")
+                val keyPasswordEnv = System.getenv("KEY_PASSWORD")
+                
+                if (keystorePath != null && File(keystorePath).exists()) {
+                    storeFile = File(keystorePath)
+                    storePassword = keystorePassword
+                    keyAlias = keyAliasEnv
+                    keyPassword = keyPasswordEnv
+                }
             }
         }
     }
+    
+    // 检查 release 签名配置是否有效
+    val releaseSigningConfig = signingConfigs.findByName("release")
+    val hasValidReleaseSigning = releaseSigningConfig?.storeFile?.exists() == true
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("release")
+            // 如果 release 签名配置有效则使用，否则使用 debug 签名
+            signingConfig = if (hasValidReleaseSigning) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

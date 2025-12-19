@@ -148,7 +148,7 @@ class SingBoxCore private constructor(private val context: Context) {
     fun isLibboxAvailable(): Boolean = libboxAvailable
 
     /**
-     * 使用 Libbox.urlTest 进行原始延迟测试
+     * 使用 Libbox.newURLTest 进行原始延迟测试
      * 这种方式不需要启动完整的 BoxService，更加轻量和高效
      */
     private suspend fun testOutboundLatencyWithLibbox(outbound: Outbound): Long = withContext(Dispatchers.IO) {
@@ -157,7 +157,6 @@ class SingBoxCore private constructor(private val context: Context) {
         try {
             val settings = SettingsRepository.getInstance(context).settings.first()
             if (!settings.useLibboxUrlTest) {
-                Log.v(TAG, "Libbox.urlTest is disabled in settings")
                 return@withContext -1L
             }
             val url = settings.latencyTestUrl
@@ -165,8 +164,28 @@ class SingBoxCore private constructor(private val context: Context) {
             
             val outboundJson = gson.toJson(outbound)
             
-            // 使用反射调用 Libbox.urlTest，以防库版本不支持
             val libboxClass = Class.forName("io.nekohasekai.libbox.Libbox")
+            
+            // 尝试 1: newURLTest (较新版本)
+            val newURLTestMethod = try {
+                libboxClass.getMethod("newURLTest", String::class.java, String::class.java, Long::class.javaPrimitiveType)
+            } catch (e: NoSuchMethodException) {
+                null
+            }
+
+            if (newURLTestMethod != null) {
+                val urlTestObj = newURLTestMethod.invoke(null, outboundJson, url, timeout)
+                if (urlTestObj != null) {
+                    val delayMethod = urlTestObj.javaClass.getMethod("delay")
+                    val delay = delayMethod.invoke(urlTestObj) as Long
+                    if (delay > 0) {
+                        Log.v(TAG, "Latency for ${outbound.tag} via Libbox.newURLTest: ${delay}ms")
+                        return@withContext delay
+                    }
+                }
+            }
+
+            // 尝试 2: urlTest (旧版本或某些变体)
             val urlTestMethod = try {
                 libboxClass.getMethod("urlTest", String::class.java, String::class.java, Long::class.javaPrimitiveType)
             } catch (e: NoSuchMethodException) {
@@ -179,11 +198,14 @@ class SingBoxCore private constructor(private val context: Context) {
                     Log.v(TAG, "Latency for ${outbound.tag} via Libbox.urlTest: ${delay}ms")
                     return@withContext delay
                 }
-            } else {
-                Log.w(TAG, "Libbox.urlTest method not found, fallback to Clash API")
+            }
+
+            // 如果都没有找到
+            if (newURLTestMethod == null && urlTestMethod == null) {
+                Log.w(TAG, "Libbox native URL test methods not found")
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Libbox.urlTest failed for ${outbound.tag}: ${e.message}")
+            Log.w(TAG, "Libbox native URL test failed for ${outbound.tag}: ${e.message}")
         }
         -1L
     }
@@ -194,9 +216,12 @@ class SingBoxCore private constructor(private val context: Context) {
      * @return 延迟时间（毫秒），-1 表示测试失败
      */
     suspend fun testOutboundLatency(outbound: Outbound): Long = withContext(Dispatchers.IO) {
-        // 优先使用原始 singbox (Libbox.urlTest)
-        val libboxDelay = testOutboundLatencyWithLibbox(outbound)
-        if (libboxDelay > 0) return@withContext libboxDelay
+        val settings = SettingsRepository.getInstance(context).settings.first()
+        
+        if (settings.useLibboxUrlTest) {
+            // 如果启用了原生测速，则绝对不使用 Clash API
+            return@withContext testOutboundLatencyWithLibbox(outbound)
+        }
 
         if (SingBoxService.isRunning) {
             // VPN 运行时，确保使用正确的 Clash API 地址
@@ -231,35 +256,23 @@ class SingBoxCore private constructor(private val context: Context) {
         // 尝试使用 Libbox.urlTest 进行批量测试
         if (libboxAvailable && settings.useLibboxUrlTest) {
             val semaphore = Semaphore(permits = 10) // 原始测试更轻量，可以增加并发
-            val jobs = outbounds.map { outbound ->
-                this@withContext.async {
-                    semaphore.withPermit {
-                        val latency = testOutboundLatencyWithLibbox(outbound)
-                        if (latency > 0) {
+            coroutineScope {
+                val jobs = outbounds.map { outbound ->
+                    async {
+                        semaphore.withPermit {
+                            val latency = testOutboundLatencyWithLibbox(outbound)
                             onResult(outbound.tag, latency)
-                            true
-                        } else {
-                            false
                         }
                     }
                 }
+                jobs.awaitAll()
             }
-            
-            val results = jobs.awaitAll()
-            val allSuccess = results.all { it }
-            
-            // 如果全部成功，直接返回
-            if (allSuccess) return@withContext
-            
-            // 否则，对失败的节点继续使用旧方式
-            val failedOutbounds = outbounds.filterIndexed { index, _ -> !results[index] }
-            if (failedOutbounds.isEmpty()) return@withContext
-            
-            Log.d(TAG, "${failedOutbounds.size} nodes failed with Libbox.urlTest, falling back to Clash API")
-            performClashApiBatchTest(failedOutbounds, onResult)
-        } else {
-            performClashApiBatchTest(outbounds, onResult)
+            // 启用原生测速时，绝对不使用 Clash API 降级
+            return@withContext
         }
+        
+        // 默认使用 Clash API 批量测试
+        performClashApiBatchTest(outbounds, onResult)
     }
 
     private suspend fun performClashApiBatchTest(

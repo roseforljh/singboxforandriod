@@ -166,11 +166,22 @@ fun RoutingSettingsScreen(
                     title = "延迟测试地址",
                     onClick = { showLatencyUrlDialog = true },
                     trailing = {
-                        Icon(
-                            imageVector = Icons.Rounded.ChevronRight,
-                            contentDescription = null,
-                            tint = Neutral500
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = settings.latencyTestUrl,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = TextSecondary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.widthIn(max = 140.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Icon(
+                                imageVector = Icons.Rounded.ChevronRight,
+                                contentDescription = null,
+                                tint = Neutral500
+                            )
+                        }
                     }
                 )
                 SettingSwitchItem(

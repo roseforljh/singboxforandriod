@@ -39,6 +39,7 @@ android {
             val props = Properties()
             val propsFile = rootProject.file("signing.properties")
             if (propsFile.exists()) {
+                // 本地开发：从 signing.properties 文件读取
                 props.load(propsFile.inputStream())
                 storeFile = rootProject.file(props.getProperty("STORE_FILE"))
                 storePassword = props.getProperty("KEYSTORE_PASSWORD")
@@ -51,7 +52,7 @@ android {
                 val keyAliasEnv = System.getenv("KEY_ALIAS")
                 val keyPasswordEnv = System.getenv("KEY_PASSWORD")
                 
-                if (keystorePath != null && File(keystorePath).exists()) {
+                if (keystorePath != null) {
                     storeFile = File(keystorePath)
                     storePassword = keystorePassword
                     keyAlias = keyAliasEnv
@@ -60,19 +61,10 @@ android {
             }
         }
     }
-    
-    // 检查 release 签名配置是否有效
-    val releaseSigningConfig = signingConfigs.findByName("release")
-    val hasValidReleaseSigning = releaseSigningConfig?.storeFile?.exists() == true
 
     buildTypes {
         release {
-            // 如果 release 签名配置有效则使用，否则使用 debug 签名
-            signingConfig = if (hasValidReleaseSigning) {
-                signingConfigs.getByName("release")
-            } else {
-                signingConfigs.getByName("debug")
-            }
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

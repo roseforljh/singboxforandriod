@@ -30,6 +30,12 @@ jobs:
         with:
           gradle-version: "8.13"
 
+      - name: Decode Keystore
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > ${{ github.workspace }}/release.keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+
       - name: Calculate Version
         id: version
         run: |
@@ -46,6 +52,11 @@ jobs:
 
       - name: Build with Gradle
         run: gradle assembleRelease -PversionCode=${{ env.COMMIT_COUNT }} -PversionName=${{ env.VERSION_NAME }}
+        env:
+          KEYSTORE_PATH: ${{ github.workspace }}/release.keystore
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4

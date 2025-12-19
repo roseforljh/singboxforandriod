@@ -148,67 +148,88 @@ class SingBoxCore private constructor(private val context: Context) {
     fun isLibboxAvailable(): Boolean = libboxAvailable
 
     /**
-     * 使用 Libbox.newURLTest 进行原始延迟测试
-     * 这种方式不需要启动完整的 BoxService，更加轻量和高效
+     * 使用 Libbox 原生方法进行延迟测试
+     * 自动尝试多种可能的签名并记录发现的方法
      */
     private suspend fun testOutboundLatencyWithLibbox(outbound: Outbound): Long = withContext(Dispatchers.IO) {
         if (!libboxAvailable) return@withContext -1L
         
         try {
             val settings = SettingsRepository.getInstance(context).settings.first()
-            if (!settings.useLibboxUrlTest) {
-                return@withContext -1L
-            }
             val url = settings.latencyTestUrl
-            val timeout = 5000L // 5秒超时
-            
+            val timeout = 5000L
             val outboundJson = gson.toJson(outbound)
             
             val libboxClass = Class.forName("io.nekohasekai.libbox.Libbox")
             
-            // 尝试 1: newURLTest (较新版本)
-            val newURLTestMethod = try {
-                libboxClass.getMethod("newURLTest", String::class.java, String::class.java, Long::class.javaPrimitiveType)
-            } catch (e: NoSuchMethodException) {
-                null
-            }
+            // 尝试从缓存中获取之前发现的方法，避免每次都反射查找
+            var methodToUse = discoveredUrlTestMethod
+            var methodType = discoveredMethodType // 0: long, 1: URLTest object
 
-            if (newURLTestMethod != null) {
-                val urlTestObj = newURLTestMethod.invoke(null, outboundJson, url, timeout)
-                if (urlTestObj != null) {
-                    val delayMethod = urlTestObj.javaClass.getMethod("delay")
-                    val delay = delayMethod.invoke(urlTestObj) as Long
-                    if (delay > 0) {
-                        Log.v(TAG, "Latency for ${outbound.tag} via Libbox.newURLTest: ${delay}ms")
-                        return@withContext delay
+            if (methodToUse == null) {
+                // 遍历 Libbox 类的所有方法进行匹配
+                val methods = libboxClass.methods
+                for (m in methods) {
+                    val name = m.name
+                    val params = m.parameterTypes
+                    
+                    // 匹配签名: (String, String, long/int) 或 (String, String, long/int, PlatformInterface)
+                    if ((name == "urlTest" || name == "newURLTest") && (params.size == 3 || params.size == 4) && 
+                        params[0] == String::class.java && params[1] == String::class.java &&
+                        (params[2] == Long::class.javaPrimitiveType || params[2] == Int::class.javaPrimitiveType)) {
+                        
+                        methodToUse = m
+                        methodType = if (m.returnType == Long::class.javaPrimitiveType) 0 else 1
+                        discoveredUrlTestMethod = m
+                        discoveredMethodType = methodType
+                        Log.i(TAG, "Discovered native URL test method: ${m.name}(${params.joinToString { it.simpleName }}) -> ${m.returnType.simpleName}")
+                        break
                     }
                 }
             }
 
-            // 尝试 2: urlTest (旧版本或某些变体)
-            val urlTestMethod = try {
-                libboxClass.getMethod("urlTest", String::class.java, String::class.java, Long::class.javaPrimitiveType)
-            } catch (e: NoSuchMethodException) {
-                null
-            }
-
-            if (urlTestMethod != null) {
-                val delay = urlTestMethod.invoke(null, outboundJson, url, timeout) as Long
-                if (delay > 0) {
-                    Log.v(TAG, "Latency for ${outbound.tag} via Libbox.urlTest: ${delay}ms")
-                    return@withContext delay
+            // 如果找到方法，执行它
+            methodToUse?.let { method ->
+                val params = method.parameterTypes
+                val timeoutParam = if (params[2] == Int::class.javaPrimitiveType) 5000 else 5000L
+                
+                val args = if (params.size == 4 && params[3].isInterface) {
+                    // 需要 PlatformInterface
+                    val pi = testPlatformInterface ?: TestPlatformInterface(context)
+                    arrayOf(outboundJson, url, timeoutParam, pi)
+                } else {
+                    arrayOf(outboundJson, url, timeoutParam)
+                }
+                
+                val result = method.invoke(null, *args)
+                
+                return@withContext when (methodType) {
+                    0 -> result as Long // 直接返回 long 延迟
+                    1 -> { // 返回 URLTest 对象
+                        val delayMethod = result?.javaClass?.getMethod("delay")
+                        val delayValue = delayMethod?.invoke(result) as? Long ?: -1L
+                        if (delayValue <= 0) {
+                            // 有些版本可能使用不同的属性名，尝试 getDelay 或 urlTestDelay
+                            val altDelayMethod = try { result?.javaClass?.getMethod("getDelay") } catch (_: Exception) { null }
+                            (altDelayMethod?.invoke(result) as? Long) ?: delayValue
+                        } else delayValue
+                    }
+                    else -> -1L
                 }
             }
 
-            // 如果都没有找到
-            if (newURLTestMethod == null && urlTestMethod == null) {
-                Log.w(TAG, "Libbox native URL test methods not found")
+            // 如果仍然找不到，尝试检查 BoxService (虽然通常是在 Libbox 静态类中)
+            if (methodToUse == null) {
+                Log.w(TAG, "Libbox native URL test methods still not found after discovery")
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Libbox native URL test failed for ${outbound.tag}: ${e.message}")
+            Log.w(TAG, "Libbox native URL test failed: ${e.message}")
         }
         -1L
     }
+
+    private var discoveredUrlTestMethod: java.lang.reflect.Method? = null
+    private var discoveredMethodType: Int = 0 // 0: long, 1: URLTest object
     
     /**
      * 测试单个节点的延迟

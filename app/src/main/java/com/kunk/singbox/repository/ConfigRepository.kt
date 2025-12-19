@@ -1933,29 +1933,9 @@ class ConfigRepository(private val context: Context) {
         // 远程 DNS
         dnsServers.add(
             DnsServer(
-                tag = "google",
-                address = "https://8.8.8.8/dns-query"
-            )
-        )
-        dnsServers.add(
-            DnsServer(
-                tag = "cloudflare",
-                address = "https://1.1.1.1/dns-query"
-            )
-        )
-        dnsServers.add(
-            DnsServer(
                 tag = "remote",
-                address = settings.remoteDns
-            )
-        )
-
-        // 本地 DNS
-        dnsServers.add(
-            DnsServer(
-                tag = "ali",
-                address = "223.5.5.5",
-                detour = "direct"
+                address = settings.remoteDns,
+                detour = "PROXY"
             )
         )
         dnsServers.add(
@@ -1992,20 +1972,38 @@ class ConfigRepository(private val context: Context) {
         }
 
         // 优化：直连/绕过类域名的 DNS 走 local
-        dnsRules.add(
-            DnsRule(
-                geosite = listOf("cn"),
-                server = "local"
+        val directRuleSets = mutableListOf<String>()
+        if (settings.ruleSets.any { it.tag == "geosite-cn" }) directRuleSets.add("geosite-cn")
+        if (settings.ruleSets.any { it.tag == "geoip-cn" }) directRuleSets.add("geoip-cn")
+        
+        if (directRuleSets.isNotEmpty()) {
+            dnsRules.add(
+                DnsRule(
+                    ruleSet = directRuleSets,
+                    server = "local"
+                )
             )
-        )
+        }
         
         // 优化：代理类域名的 DNS 走 remote
-        dnsRules.add(
-            DnsRule(
-                geosite = listOf("geolocation-!cn", "google", "youtube", "telegram", "github", "twitter", "netflix"),
-                server = "google"
-            )
+        val proxyRuleSets = mutableListOf<String>()
+        val possibleProxyTags = listOf(
+            "geosite-geolocation-!cn", "geosite-google", "geosite-openai", 
+            "geosite-youtube", "geosite-telegram", "geosite-github", 
+            "geosite-twitter", "geosite-netflix", "geosite-apple"
         )
+        possibleProxyTags.forEach { tag ->
+            if (settings.ruleSets.any { it.tag == tag }) proxyRuleSets.add(tag)
+        }
+
+        if (proxyRuleSets.isNotEmpty()) {
+            dnsRules.add(
+                DnsRule(
+                    ruleSet = proxyRuleSets,
+                    server = "remote"
+                )
+            )
+        }
 
         val dns = DnsConfig(
             servers = dnsServers,
@@ -2268,7 +2266,9 @@ class ConfigRepository(private val context: Context) {
                         "10.0.0.0/8",
                         "172.16.0.0/12",
                         "192.168.0.0/16",
-                        "fc00::/7"
+                        "fc00::/7",
+                        "127.0.0.0/8",
+                        "::1/128"
                     ),
                     outbound = "direct"
                 )

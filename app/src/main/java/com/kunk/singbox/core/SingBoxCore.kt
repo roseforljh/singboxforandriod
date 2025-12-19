@@ -239,8 +239,9 @@ class SingBoxCore private constructor(private val context: Context) {
                     
                     try {
                         val candidates = methods.filter { (it.parameterTypes.size == 3 || (it.parameterTypes.size == 4 && it.parameterTypes[3].isInterface)) && it.parameterTypes[0] == String::class.java && it.parameterTypes[1] == String::class.java && (it.parameterTypes[2] == Long::class.javaPrimitiveType || it.parameterTypes[2] == Int::class.javaPrimitiveType) && Modifier.isStatic(it.modifiers) }
+                        Log.i(TAG, "Libbox static candidates count: ${candidates.size}")
                         if (candidates.isNotEmpty()) {
-                            Log.v(TAG, "Libbox static candidates: " + candidates.joinToString { it.name + "(" + it.parameterTypes.joinToString { p -> p.simpleName } + ") -> " + it.returnType.simpleName })
+                            Log.i(TAG, "Libbox static candidates: " + candidates.joinToString { it.name + "(" + it.parameterTypes.joinToString { p -> p.simpleName } + ") -> " + it.returnType.simpleName })
                         }
                     } catch (_: Exception) { }
                 }
@@ -362,8 +363,9 @@ class SingBoxCore private constructor(private val context: Context) {
                         
                         try {
                             val candidates = instanceMethods.filter { (it.parameterTypes.size == 3 || (it.parameterTypes.size == 4 && it.parameterTypes[3].isInterface)) && it.parameterTypes[0] == String::class.java && it.parameterTypes[1] == String::class.java && (it.parameterTypes[2] == Long::class.javaPrimitiveType || it.parameterTypes[2] == Int::class.javaPrimitiveType) && !Modifier.isStatic(it.modifiers) }
+                            Log.i(TAG, "BoxService instance candidates count: ${candidates.size}")
                             if (candidates.isNotEmpty()) {
-                                Log.v(TAG, "BoxService instance candidates: " + candidates.joinToString { it.name + "(" + it.parameterTypes.joinToString { p -> p.simpleName } + ") -> " + it.returnType.simpleName })
+                                Log.i(TAG, "BoxService instance candidates: " + candidates.joinToString { it.name + "(" + it.parameterTypes.joinToString { p -> p.simpleName } + ") -> " + it.returnType.simpleName })
                             }
                         } catch (_: Exception) { }
                     } finally {

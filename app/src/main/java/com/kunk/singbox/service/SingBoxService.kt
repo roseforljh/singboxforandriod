@@ -347,10 +347,18 @@ class SingBoxService : VpnService() {
             
             // 设置底层网络 - 关键！让 VPN 流量可以通过物理网络出去
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
-                val activeNetwork = connectivityManager?.activeNetwork
-                if (activeNetwork != null) {
-                    builder.setUnderlyingNetworks(arrayOf(activeNetwork))
-                    Log.v(TAG, "Set underlying network: $activeNetwork")
+                val activePhysicalNetwork = lastKnownNetwork ?: connectivityManager?.activeNetwork?.takeIf {
+                    val caps = connectivityManager?.getNetworkCapabilities(it)
+                    caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
+                    caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) == true
+                }
+                
+                if (activePhysicalNetwork != null) {
+                    builder.setUnderlyingNetworks(arrayOf(activePhysicalNetwork))
+                    Log.i(TAG, "Set underlying network: $activePhysicalNetwork")
+                } else {
+                    Log.w(TAG, "No physical network found for underlying networks")
+                    builder.setUnderlyingNetworks(null) // Let system decide
                 }
             }
             

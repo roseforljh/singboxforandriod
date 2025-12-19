@@ -1901,8 +1901,8 @@ class ConfigRepository(private val context: Context) {
                     interfaceName = settings.tunInterfaceName,
                     inet4Address = listOf("172.19.0.1/30"),
                     mtu = settings.tunMtu,
-                    autoRoute = settings.autoRoute,
-                    strictRoute = settings.strictRoute,
+                    autoRoute = false, // Handled by Android VpnService
+                    strictRoute = false, // Can cause issues on some Android versions
                     stack = settings.tunStack.name.lowercase(), // gvisor/system/mixed/lwip
                     sniff = true,
                     sniffOverrideDestination = true,

@@ -1972,7 +1972,23 @@ class ConfigRepository(private val context: Context) {
             )
         )
 
-        // 3. 备用国内 DNS
+        // 3. 备用公共 DNS (直接连接，用于 bootstrap 和兜底)
+        dnsServers.add(
+            DnsServer(
+                tag = "google-dns",
+                address = "8.8.8.8",
+                detour = "direct"
+            )
+        )
+        dnsServers.add(
+            DnsServer(
+                tag = "cloudflare-dns",
+                address = "1.1.1.1",
+                detour = "direct"
+            )
+        )
+
+        // 4. 备用国内 DNS
         dnsServers.add(
             DnsServer(
                 tag = "dnspod",

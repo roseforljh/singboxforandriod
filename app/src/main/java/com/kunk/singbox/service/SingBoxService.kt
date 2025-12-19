@@ -171,19 +171,32 @@ class SingBoxService : VpnService() {
     private fun startHealthCheck() {
         stopHealthCheck()
         healthCheckJob = watchdogScope.launch {
+            var failureCount = 0
             while (isActive) {
                 delay(15000) // Check every 15 seconds
                 if (isRunning && boxService != null) {
                     try {
-                        // Check if boxService is still alive
-                        // Here we can check some property or call a lightweight method
-                        // For now, we check if the object is still there and hasn't crashed
-                        // In a real scenario, we might want to check the Clash API or a memory marker
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Health check failed, restarting VPN", e)
-                        withContext(Dispatchers.Main) {
-                            lastConfigPath?.let { startVpn(it) }
+                        val clashApi = SingBoxCore.getInstance(this@SingBoxService).getClashApiClient()
+                        val isAlive = withTimeoutOrNull(3000) {
+                            clashApi.isAvailable()
+                        } ?: false
+                        
+                        if (isAlive) {
+                            failureCount = 0
+                        } else {
+                            failureCount++
+                            Log.w(TAG, "Health check: Clash API not responding (failure count: $failureCount)")
                         }
+
+                        if (failureCount >= 3) {
+                            Log.e(TAG, "Health check failed 3 times, restarting VPN")
+                            failureCount = 0
+                            withContext(Dispatchers.Main) {
+                                lastConfigPath?.let { startVpn(it) }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Health check error", e)
                     }
                 }
             }
@@ -510,17 +523,28 @@ class SingBoxService : VpnService() {
             
             networkCallback = object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
-                    updateDefaultInterface(network)
+                    val caps = connectivityManager?.getNetworkCapabilities(network)
+                    val isVpn = caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+                    Log.i(TAG, "Network available: $network (isVpn=$isVpn)")
+                    if (!isVpn) {
+                        updateDefaultInterface(network)
+                    }
                 }
                 
                 override fun onLost(network: Network) {
-                    Log.i(TAG, "Network lost")
-                    lastKnownNetwork = null
-                    currentInterfaceListener?.updateDefaultInterface("", 0, false, false)
+                    Log.i(TAG, "Network lost: $network")
+                    if (network == lastKnownNetwork) {
+                        lastKnownNetwork = null
+                        currentInterfaceListener?.updateDefaultInterface("", 0, false, false)
+                    }
                 }
                 
                 override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
-                    updateDefaultInterface(network)
+                    val isVpn = caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                    Log.v(TAG, "Network capabilities changed: $network (isVpn=$isVpn)")
+                    if (!isVpn) {
+                        updateDefaultInterface(network)
+                    }
                 }
             }
             

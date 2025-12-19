@@ -167,6 +167,7 @@ class SingBoxService : VpnService() {
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var currentInterfaceListener: InterfaceUpdateListener? = null
     private var defaultInterfaceName: String = ""
+    private var lastKnownNetwork: Network? = null
     
     // Platform interface implementation
     private val platformInterface = object : PlatformInterface {
@@ -186,6 +187,7 @@ class SingBoxService : VpnService() {
             
             // 添加地址
             builder.addAddress("172.19.0.1", 30)
+            builder.addAddress("fd00::1", 126)
             
             // 添加路由
             val routeMode = settings?.vpnRouteMode ?: VpnRouteMode.GLOBAL
@@ -220,6 +222,7 @@ class SingBoxService : VpnService() {
             if (!usedCustomRoutes) {
                 // fallback: 全局接管
                 builder.addRoute("0.0.0.0", 0)
+                builder.addRoute("::", 0)
             }
             
             // 添加 DNS (优先使用设置中的 DNS)
@@ -440,6 +443,7 @@ class SingBoxService : VpnService() {
                 
                 override fun onLost(network: Network) {
                     Log.i(TAG, "Network lost")
+                    lastKnownNetwork = null
                     currentInterfaceListener?.updateDefaultInterface("", 0, false, false)
                 }
                 
@@ -557,6 +561,12 @@ class SingBoxService : VpnService() {
     
     private fun updateDefaultInterface(network: Network) {
         try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1 && network != lastKnownNetwork) {
+                setUnderlyingNetworks(arrayOf(network))
+                lastKnownNetwork = network
+                Log.i(TAG, "Switched underlying network to $network")
+            }
+
             val linkProperties = connectivityManager?.getLinkProperties(network)
             val interfaceName = linkProperties?.interfaceName ?: ""
 

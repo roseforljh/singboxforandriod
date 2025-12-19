@@ -210,7 +210,7 @@ class SettingsRepository(private val context: Context) {
             // TUN/VPN 设置
             tunEnabled = preferences[PreferencesKeys.TUN_ENABLED] ?: true,
             tunStack = TunStack.fromDisplayName(preferences[PreferencesKeys.TUN_STACK] ?: "gVisor"),
-            tunMtu = preferences[PreferencesKeys.TUN_MTU] ?: 1500,
+            tunMtu = preferences[PreferencesKeys.TUN_MTU] ?: 1280,
             tunInterfaceName = preferences[PreferencesKeys.TUN_INTERFACE_NAME] ?: "tun0",
             autoRoute = preferences[PreferencesKeys.AUTO_ROUTE] ?: true,
             strictRoute = preferences[PreferencesKeys.STRICT_ROUTE] ?: true,
@@ -221,7 +221,7 @@ class SettingsRepository(private val context: Context) {
             vpnBlocklist = preferences[PreferencesKeys.VPN_BLOCKLIST] ?: "",
             
             // DNS 设置
-            localDns = preferences[PreferencesKeys.LOCAL_DNS] ?: "8.8.8.8",
+            localDns = preferences[PreferencesKeys.LOCAL_DNS] ?: "223.5.5.5",
             remoteDns = preferences[PreferencesKeys.REMOTE_DNS] ?: "1.1.1.1",
             fakeDnsEnabled = preferences[PreferencesKeys.FAKE_DNS_ENABLED] ?: true,
             fakeIpRange = preferences[PreferencesKeys.FAKE_IP_RANGE] ?: "198.18.0.0/15",
@@ -406,6 +406,19 @@ class SettingsRepository(private val context: Context) {
             }
 
             val currentSettings = settings.first()
+            
+            // 自动迁移: 优化 TUN MTU (1500 -> 1280)
+            if (currentSettings.tunMtu == 1500) {
+                Log.i("SettingsRepository", "Migrating TUN MTU from 1500 to 1280")
+                setTunMtu(1280)
+            }
+            
+            // 自动迁移: 优化本地 DNS (8.8.8.8 -> 223.5.5.5)
+            if (currentSettings.localDns == "8.8.8.8") {
+                Log.i("SettingsRepository", "Migrating Local DNS from 8.8.8.8 to 223.5.5.5")
+                setLocalDns("223.5.5.5")
+            }
+
             val originalRuleSets = currentSettings.ruleSets
             val currentMirrorUrl = currentSettings.ghProxyMirror.url
             val migratedRuleSets = originalRuleSets.map { ruleSet ->

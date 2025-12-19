@@ -14,7 +14,7 @@ data class AppSettings(
     // TUN/VPN 设置
     @SerializedName("tunEnabled") val tunEnabled: Boolean = true,
     @SerializedName("tunStack") val tunStack: TunStack = TunStack.GVISOR,
-    @SerializedName("tunMtu") val tunMtu: Int = 1500,
+    @SerializedName("tunMtu") val tunMtu: Int = 1280,
     @SerializedName("tunInterfaceName") val tunInterfaceName: String = "tun0",
     @SerializedName("autoRoute") val autoRoute: Boolean = true,
     @SerializedName("strictRoute") val strictRoute: Boolean = true,
@@ -25,7 +25,7 @@ data class AppSettings(
     @SerializedName("vpnBlocklist") val vpnBlocklist: String = "",
     
     // DNS 设置
-    @SerializedName("localDns") val localDns: String = "8.8.8.8",
+    @SerializedName("localDns") val localDns: String = "223.5.5.5",
     @SerializedName("remoteDns") val remoteDns: String = "1.1.1.1",
     @SerializedName("fakeDnsEnabled") val fakeDnsEnabled: Boolean = true,
     @SerializedName("fakeIpRange") val fakeIpRange: String = "198.18.0.0/15",

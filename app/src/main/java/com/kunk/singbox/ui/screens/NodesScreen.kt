@@ -18,6 +18,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -350,29 +353,38 @@ fun NodesScreen(
                     var visible by remember { mutableStateOf(false) }
                     LaunchedEffect(Unit) {
                         if (index < 15) {
-                            delay(index * 50L)
+                            delay(index * 30L)
                         }
                         visible = true
                     }
 
-                    AnimatedVisibility(
-                        visible = visible,
-                        enter = slideInVertically(initialOffsetY = { it / 2 }) + fadeIn(),
-                        exit = fadeOut()
-                    ) {
-                        NodeCard(
-                            name = node.displayName,
-                            type = node.protocol,
-                            latency = node.latencyMs,
-                            isSelected = isSelected,
-                            isTesting = isTestingNode,
-                            onClick = onNodeClick,
-                            onEdit = onEdit,
-                            onExport = onExport,
-                            onLatency = onLatency,
-                            onDelete = onDelete
+                    val alpha by animateFloatAsState(
+                        targetValue = if (visible) 1f else 0f,
+                        animationSpec = tween(durationMillis = 300),
+                        label = "alpha"
+                    )
+                    val translateY by animateFloatAsState(
+                        targetValue = if (visible) 0f else 40f,
+                        animationSpec = tween(durationMillis = 300),
+                        label = "translateY"
+                    )
+
+                    NodeCard(
+                        name = node.displayName,
+                        type = node.protocol,
+                        latency = node.latencyMs,
+                        isSelected = isSelected,
+                        isTesting = isTestingNode,
+                        onClick = onNodeClick,
+                        onEdit = onEdit,
+                        onExport = onExport,
+                        onLatency = onLatency,
+                        onDelete = onDelete,
+                        modifier = Modifier.graphicsLayer(
+                            alpha = alpha,
+                            translationY = translateY
                         )
-                    }
+                    )
                 }
             }
         }

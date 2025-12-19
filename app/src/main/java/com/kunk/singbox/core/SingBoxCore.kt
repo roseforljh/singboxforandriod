@@ -31,6 +31,7 @@ import java.io.File
 import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.URI
+import java.lang.reflect.Modifier
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -187,6 +188,24 @@ class SingBoxCore private constructor(private val context: Context) {
                         break
                     }
                 }
+                // 若按方法名未找到，进一步按签名匹配（兼容被混淆的库）
+                if (methodToUse == null) {
+                    for (m in methods) {
+                        val params = m.parameterTypes
+                        if ((params.size == 3 || (params.size == 4 && params[3].isInterface)) &&
+                            params[0] == String::class.java && params[1] == String::class.java &&
+                            (params[2] == Long::class.javaPrimitiveType || params[2] == Int::class.javaPrimitiveType) &&
+                            Modifier.isStatic(m.modifiers)
+                        ) {
+                            methodToUse = m
+                            methodType = if (m.returnType == Long::class.javaPrimitiveType) 0 else 1
+                            discoveredUrlTestMethod = m
+                            discoveredMethodType = methodType
+                            Log.i(TAG, "Discovered native URL test method by signature: ${m.name}(${params.joinToString { it.simpleName }}) -> ${m.returnType.simpleName}")
+                            break
+                        }
+                    }
+                }
             }
 
             // 如果找到方法，执行它
@@ -291,8 +310,10 @@ class SingBoxCore private constructor(private val context: Context) {
         val settings = SettingsRepository.getInstance(context).settings.first()
         
         if (settings.useLibboxUrlTest) {
-            // 如果启用了原生测速，则绝对不使用 Clash API
-            return@withContext testOutboundLatencyWithLibbox(outbound)
+            val native = testOutboundLatencyWithLibbox(outbound)
+            if (native >= 0) return@withContext native
+            Log.w(TAG, "Native URL test unavailable or failed, falling back to Clash API")
+            // 继续走 Clash API 的回退流程
         }
 
         if (SingBoxService.isRunning) {

@@ -19,6 +19,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -231,7 +232,7 @@ class SingBoxCore private constructor(private val context: Context) {
         if (libboxAvailable && settings.useLibboxUrlTest) {
             val semaphore = Semaphore(permits = 10) // 原始测试更轻量，可以增加并发
             val jobs = outbounds.map { outbound ->
-                async {
+                this@withContext.async {
                     semaphore.withPermit {
                         val latency = testOutboundLatencyWithLibbox(outbound)
                         if (latency > 0) {
@@ -264,7 +265,7 @@ class SingBoxCore private constructor(private val context: Context) {
     private suspend fun performClashApiBatchTest(
         outbounds: List<Outbound>,
         onResult: (tag: String, latency: Long) -> Unit
-    ) {
+    ) = coroutineScope {
         try {
             if (!SingBoxService.isRunning) {
                 ensureTestServiceRunning(outbounds)

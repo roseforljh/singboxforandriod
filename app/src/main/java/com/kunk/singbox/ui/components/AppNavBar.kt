@@ -106,8 +106,11 @@ fun AppNavBar(
                                 saveState = true
                             }
                             launchSingleTop = true
-                            restoreState = true
+                            restoreState = screen != Screen.Settings
                         }
+                    } else if (screen == Screen.Settings) {
+                        // If user taps Settings again while inside a Settings sub-screen, return to Settings root.
+                        navController.popBackStack(Screen.Settings.route, false)
                     }
                 },
                 colors = NavigationBarItemDefaults.colors(

@@ -493,7 +493,7 @@ class SingBoxCore private constructor(private val context: Context) {
                 calibrateBaseline()
             }
             
-            val settings = SettingsRepository.getInstance(context).settings.first()
+            val settings = SettingsRepository.getInstance(context).settings.value
             val type = when (settings.latencyTestMethod) {
                 LatencyTestMethod.TCP -> "tcp"
                 LatencyTestMethod.HANDSHAKE -> "handshake"

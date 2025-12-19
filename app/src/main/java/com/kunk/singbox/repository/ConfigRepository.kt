@@ -1,7 +1,7 @@
 package com.kunk.singbox.repository
 
-import android.content.Context
 import android.content.Intent
+import android.content.Context
 import android.os.Build
 import android.util.Base64
 import android.util.Log
@@ -10,7 +10,6 @@ import com.google.gson.JsonSyntaxException
 import com.kunk.singbox.core.SingBoxCore
 import com.kunk.singbox.model.*
 import com.kunk.singbox.service.SingBoxService
-import com.kunk.singbox.utils.ClashConfigParser
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -39,11 +38,7 @@ class ConfigRepository(private val context: Context) {
         private const val TAG = "ConfigRepository"
         
         // User-Agent 列表，按优先级排序
-        // 优先使用 Clash Meta UA 获取更兼容的 YAML 格式
         private val USER_AGENTS = listOf(
-            "clash-verge/v1.4.0",           // Clash Verge - 返回 Clash YAML
-            "ClashMetaForAndroid/2.8.9",    // Clash Meta for Android
-            "clash.meta",                    // Clash Meta 通用标识
             "sing-box/1.8.0",               // Sing-box - 返回原生 JSON
             "SFA/1.8.0"                     // Sing-box for Android
         )
@@ -222,7 +217,6 @@ class ConfigRepository(private val context: Context) {
      */
     /**
      * 使用多种 User-Agent 尝试获取订阅内容
-     * 优先尝试 Clash Meta UA，以获取更兼容的 YAML 格式
      * 如果解析失败，依次尝试其他 UA
      *
      * @param url 订阅链接
@@ -446,17 +440,7 @@ class ConfigRepository(private val context: Context) {
             // 继续尝试其他格式
         }
         
-        // 2. 尝试解析为 Clash YAML
-        try {
-            val config = ClashConfigParser.parse(normalizedContent)
-            if (config != null && config.outbounds != null && config.outbounds.isNotEmpty()) {
-                return config
-            }
-        } catch (e: Exception) {
-            // 继续尝试其他格式
-        }
-
-        // 3. 尝试 Base64 解码后解析
+        // 2. 尝试 Base64 解码后解析
         try {
             val decoded = String(Base64.decode(normalizedContent.trim(), Base64.DEFAULT))
             
@@ -468,19 +452,11 @@ class ConfigRepository(private val context: Context) {
                 }
             } catch (e: Exception) {}
 
-            // 尝试解析解码后的内容为 Clash YAML
-            try {
-                val config = ClashConfigParser.parse(decoded)
-                if (config != null && config.outbounds != null && config.outbounds.isNotEmpty()) {
-                    return config
-                }
-            } catch (e: Exception) {}
-
         } catch (e: Exception) {
             // 继续尝试其他格式
         }
         
-        // 4. 尝试解析为节点链接列表 (每行一个链接)
+        // 3. 尝试解析为节点链接列表 (每行一个链接)
         try {
             val lines = normalizedContent.trim().lines().filter { it.isNotBlank() }
             if (lines.isNotEmpty()) {

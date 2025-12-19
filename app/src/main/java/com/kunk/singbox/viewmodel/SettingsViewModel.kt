@@ -153,10 +153,6 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { repository.setLatencyTestUrl(value) }
     }
     
-    fun setUseLibboxUrlTest(value: Boolean) {
-        viewModelScope.launch { repository.setUseLibboxUrlTest(value) }
-    }
-    
     fun setBypassLan(value: Boolean) {
         viewModelScope.launch { repository.setBypassLan(value) }
     }

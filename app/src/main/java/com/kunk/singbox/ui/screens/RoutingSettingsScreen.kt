@@ -184,12 +184,6 @@ fun RoutingSettingsScreen(
                         }
                     }
                 )
-                SettingSwitchItem(
-                    title = "使用原生 sing-box 测速",
-                    subtitle = "不依赖 Clash API 桥接，更轻量高效",
-                    checked = settings.useLibboxUrlTest,
-                    onCheckedChange = { settingsViewModel.setUseLibboxUrlTest(it) }
-                )
                 SettingItem(title = "GitHub 镜像", value = settings.ghProxyMirror.displayName, onClick = { showMirrorDialog = true })
             }
             

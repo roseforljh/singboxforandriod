@@ -168,7 +168,7 @@ class SingBoxCore private constructor(private val context: Context) {
                 }
             } catch (_: Exception) { url }
             val timeout = 5000L
-            val outboundJson = gson.toJson(outbound)
+            val outboundJson = "{" + "\"tag\":\"" + outbound.tag + "\"" + "}"
             
             val libboxClass = Class.forName("io.nekohasekai.libbox.Libbox")
 
@@ -364,109 +364,13 @@ class SingBoxCore private constructor(private val context: Context) {
                 }
                 Log.w(TAG, "Libbox native URL test methods still not found after discovery")
             }
-            if (methodToUse == null) {
-                try {
-                    val boxServiceClass = Class.forName("io.nekohasekai.libbox.BoxService")
-                    val instanceMethods = boxServiceClass.methods
-                    var instMethod: java.lang.reflect.Method? = null
-                    var instMethodType = 0
-                    for (m in instanceMethods) {
-                        val name = m.name
-                        val params = m.parameterTypes
-                        if ((name.equals("urlTest", true) || name.equals("newURLTest", true)) && (params.size == 3 || params.size == 4) &&
-                            params[0] == String::class.java && params[1] == String::class.java &&
-                            (params[2] == Long::class.javaPrimitiveType || params[2] == Int::class.javaPrimitiveType) &&
-                            !java.lang.reflect.Modifier.isStatic(m.modifiers)) {
-                            instMethod = m
-                            instMethodType = if (m.returnType == Long::class.javaPrimitiveType) 0 else 1
-                            break
-                        }
-                    }
-                    if (instMethod == null) {
-                        for (m in instanceMethods) {
-                            val params = m.parameterTypes
-                            if ((params.size == 3 || (params.size == 4 && params[3].isInterface)) &&
-                                params[0] == String::class.java && params[1] == String::class.java &&
-                                (params[2] == Long::class.javaPrimitiveType || params[2] == Int::class.javaPrimitiveType) &&
-                                !java.lang.reflect.Modifier.isStatic(m.modifiers)) {
-                                instMethod = m
-                                instMethodType = if (m.returnType == Long::class.javaPrimitiveType) 0 else 1
-                                break
-                            }
-                        }
-                    }
-                    if (instMethod != null) {
-                        ensureLibboxSetup(context)
-                        val pi = TestPlatformInterface(context)
-                        val minimalConfig = SingBoxConfig(
-                            log = com.kunk.singbox.model.LogConfig(level = "warn", timestamp = true)
-                        )
-                        val cfgJson = gson.toJson(minimalConfig)
-                        val service = Libbox.newService(cfgJson, pi)
-                        try {
-                            try { service.start() } catch (_: Exception) {}
-                            val p = instMethod!!.parameterTypes
-                            val args = buildUrlTestArgs(p, outboundJson, url, pi)
-                            val result = instMethod!!.invoke(service, *args)
-                            Log.i(TAG, "Invoked BoxService native URL test method: ${instMethod!!.name}(${p.joinToString { it.simpleName }}) -> ${instMethod!!.returnType.simpleName}")
-                            return@withContext when (instMethodType) {
-                                0 -> result as Long
-                                1 -> extractDelayFromUrlTest(result, finalSettings.latencyTestMethod)
-                                else -> -1L
-                            }
-                        } finally {
-                            try { service.close() } catch (_: Exception) {}
-                        }
-                    }
-
-                    ensureLibboxSetup(context)
-                    val pi = TestPlatformInterface(context)
-                    val minimalConfig = SingBoxConfig(
-                        log = com.kunk.singbox.model.LogConfig(level = "warn", timestamp = true)
-                    )
-                    val cfgJson = gson.toJson(minimalConfig)
-                    val service = Libbox.newService(cfgJson, pi)
-                    try {
-                        try { service.start() } catch (_: Exception) {}
-                        for (m in instanceMethods) {
-                            val params = m.parameterTypes
-                            val okParams = (params.size == 3 || (params.size == 4 && params[3].isInterface)) &&
-                                    params[0] == String::class.java && params[1] == String::class.java &&
-                                    (params[2] == Long::class.javaPrimitiveType || params[2] == Int::class.javaPrimitiveType) &&
-                                    !Modifier.isStatic(m.modifiers)
-                            if (okParams) {
-                                try {
-                                    val args = buildUrlTestArgs(params, outboundJson, url, pi)
-                                    val rt = m.returnType
-                                    if (rt == Long::class.javaPrimitiveType || hasDelayAccessors(rt)) {
-                                        val result = m.invoke(service, *args)
-                                        Log.i(TAG, "Invoked BoxService candidate method: ${m.name}(${params.joinToString { it.simpleName }}) -> ${rt.simpleName}")
-                                        return@withContext when {
-                                            rt == Long::class.javaPrimitiveType -> result as Long
-                                            else -> extractDelayFromUrlTest(result, finalSettings.latencyTestMethod)
-                                        }
-                                    }
-                                } catch (_: Exception) { }
-                            }
-                        }
-                        
-                        try {
-                            val candidates = instanceMethods.filter { (it.parameterTypes.size == 3 || (it.parameterTypes.size == 4 && it.parameterTypes[3].isInterface)) && it.parameterTypes[0] == String::class.java && it.parameterTypes[1] == String::class.java && (it.parameterTypes[2] == Long::class.javaPrimitiveType || it.parameterTypes[2] == Int::class.javaPrimitiveType) && !Modifier.isStatic(it.modifiers) }
-                            Log.i(TAG, "BoxService instance candidates count: ${candidates.size}")
-                            if (candidates.isNotEmpty()) {
-                                Log.i(TAG, "BoxService instance candidates: " + candidates.joinToString { it.name + "(" + it.parameterTypes.joinToString { p -> p.simpleName } + ") -> " + it.returnType.simpleName })
-                            }
-                        } catch (_: Exception) { }
-                    } finally {
-                        try { service.close() } catch (_: Exception) {}
-                    }
-                } catch (_: Exception) { }
-            }
+            // BoxService instance urlTest is not guaranteed to exist in our libbox binding.
+            // We only rely on Libbox static urlTest/newURLTest here.
         } catch (e: Exception) {
             Log.w(TAG, "Libbox native URL test failed: ${e.message}")
         }
 
-        // 使用本地 HTTP 入站 + 代理的方式进行原生测速（不依赖 Clash API）
+        // 使用本地 HTTP 入站 + 代理的方式进行原生测速
         return@withContext try {
             val finalSettings = settings ?: SettingsRepository.getInstance(context).settings.first()
             val finalUrl = adjustUrlForMode(finalSettings.latencyTestUrl, finalSettings.latencyTestMethod)
@@ -598,12 +502,14 @@ class SingBoxCore private constructor(private val context: Context) {
         )
         val direct = com.kunk.singbox.model.Outbound(type = "direct", tag = "direct")
 
+        val settings = SettingsRepository.getInstance(context).settings.first()
+
         val config = SingBoxConfig(
             log = com.kunk.singbox.model.LogConfig(level = "warn", timestamp = true),
             dns = com.kunk.singbox.model.DnsConfig(
                 servers = listOf(
-                    com.kunk.singbox.model.DnsServer(tag = "google", address = "8.8.8.8", detour = "direct"),
-                    com.kunk.singbox.model.DnsServer(tag = "local", address = "223.5.5.5", detour = "direct")
+                    com.kunk.singbox.model.DnsServer(tag = "local", address = settings.localDns, detour = "direct"),
+                    com.kunk.singbox.model.DnsServer(tag = "remote", address = settings.remoteDns, detour = "direct")
                 )
             ),
             inbounds = listOf(inbound),
@@ -627,6 +533,9 @@ class SingBoxCore private constructor(private val context: Context) {
             service = Libbox.newService(configJson, platformInterface)
             service.start()
 
+            // Let the core initialize routing/DNS briefly to avoid measuring cold-start overhead.
+            delay(150)
+
             val client = OkHttpClient.Builder()
                 .proxy(Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", port)))
                 .connectTimeout(timeoutMs.toLong(), TimeUnit.MILLISECONDS)
@@ -649,7 +558,45 @@ class SingBoxCore private constructor(private val context: Context) {
             try { service?.close() } catch (_: Exception) {}
         }
     }
-    
+
+    private suspend fun testWithLibboxStaticUrlTest(
+        outbound: Outbound,
+        targetUrl: String,
+        timeoutMs: Int,
+        method: LatencyTestMethod
+    ): Long = withContext(Dispatchers.IO) {
+        try {
+            val libboxClass = Class.forName("io.nekohasekai.libbox.Libbox")
+            val selectorJson = "{\"tag\":\"" + outbound.tag + "\"}"
+
+            // Prefer discovered method (urlTest/newURLTest) with signature variations.
+            val m = discoveredUrlTestMethod
+            if (m != null) {
+                val args = buildUrlTestArgs(m.parameterTypes, selectorJson, targetUrl, TestPlatformInterface(context))
+                val result = m.invoke(null, *args)
+                return@withContext when {
+                    m.returnType == Long::class.javaPrimitiveType -> result as Long
+                    else -> extractDelayFromUrlTest(result, method)
+                }
+            }
+
+            // Fallback: direct reflect by common signature (String,String,long)
+            val urlTestMethod = libboxClass.getMethod(
+                "urlTest",
+                String::class.java,
+                String::class.java,
+                Long::class.javaPrimitiveType
+            )
+            val result = urlTestMethod.invoke(null, selectorJson, targetUrl, timeoutMs.toLong())
+            when (result) {
+                is Long -> result
+                else -> extractDelayFromUrlTest(result, method)
+            }
+        } catch (_: Exception) {
+            -1L
+        }
+    }
+
     /**
      * 测试单个节点的延迟
      * @param outbound 节点出站配置
@@ -658,9 +605,23 @@ class SingBoxCore private constructor(private val context: Context) {
     suspend fun testOutboundLatency(outbound: Outbound): Long = withContext(Dispatchers.IO) {
         val settings = SettingsRepository.getInstance(context).settings.first()
 
-        // Native-only strategy: use libbox URLTest and local HTTP-proxy based testing only.
-        // We intentionally avoid Clash API (HTTP/WebSocket) to remove secret/auth/process issues.
-        return@withContext testOutboundLatencyWithLibbox(outbound, settings)
+        // When VPN is running, prefer running-instance URLTest.
+        // When VPN is stopped, use a temporary libbox service + local HTTP proxy to test without starting VPN.
+        if (SingBoxService.isRunning) {
+            return@withContext testOutboundLatencyWithLibbox(outbound, settings)
+        }
+
+        val url = adjustUrlForMode(settings.latencyTestUrl, settings.latencyTestMethod)
+
+        val rtt = testWithLibboxStaticUrlTest(outbound, url, 5000, settings.latencyTestMethod)
+        if (rtt >= 0) {
+            Log.i(TAG, "Offline URLTest RTT: ${outbound.tag} -> ${rtt} ms")
+            return@withContext rtt
+        }
+
+        val fallback = testWithLocalHttpProxy(outbound, url, 5000)
+        Log.i(TAG, "Offline HTTP fallback: ${outbound.tag} -> ${fallback} ms")
+        return@withContext fallback
     }
     
     /**
@@ -675,12 +636,15 @@ class SingBoxCore private constructor(private val context: Context) {
         val settings = SettingsRepository.getInstance(context).settings.first()
 
         // Native-only batch test: libbox URLTest first.
-        if (libboxAvailable && settings.useLibboxUrlTest && SingBoxService.isRunning) {
+        if (libboxAvailable && SingBoxService.isRunning) {
             // 先做一次轻量预热，避免批量首个请求落在 link 验证/路由冷启动窗口
             try {
                 val libboxClass = Class.forName("io.nekohasekai.libbox.Libbox")
-                val url = adjustUrlForMode(settings.latencyTestUrl, settings.latencyTestMethod)
-                maybeWarmupNative(libboxClass, url)
+                val warmupOutbound = outbounds.firstOrNull()
+                if (warmupOutbound != null) {
+                    val url = adjustUrlForMode(settings.latencyTestUrl, settings.latencyTestMethod)
+                    maybeWarmupNative(libboxClass, url)
+                }
             } catch (_: Exception) { }
             val semaphore = Semaphore(permits = 6)
             coroutineScope {
@@ -697,15 +661,16 @@ class SingBoxCore private constructor(private val context: Context) {
             return@withContext
         }
 
-        // Other cases: still stay native-only.
-        // Running or not running doesn't matter for the local HTTP-proxy fallback inside testOutboundLatencyWithLibbox.
-        val semaphore = Semaphore(permits = 4)
+        // VPN is not running: use static URLTest first for each outbound.
+        val url = adjustUrlForMode(settings.latencyTestUrl, settings.latencyTestMethod)
+        val semaphore = Semaphore(permits = 6)
         coroutineScope {
             val jobs = outbounds.map { outbound ->
                 async {
                     semaphore.withPermit {
-                        val latency = testOutboundLatencyWithLibbox(outbound, settings)
-                        onResult(outbound.tag, latency)
+                        val rtt = testWithLibboxStaticUrlTest(outbound, url, 5000, settings.latencyTestMethod)
+                        if (rtt >= 0) return@withPermit onResult(outbound.tag, rtt)
+                        onResult(outbound.tag, testWithLocalHttpProxy(outbound, url, 5000))
                     }
                 }
             }

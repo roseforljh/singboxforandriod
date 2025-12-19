@@ -221,16 +221,7 @@ data class RuleSetConfig(
 
 @Keep
 data class ExperimentalConfig(
-    @SerializedName("clash_api") val clashApi: ClashApiConfig? = null,
     @SerializedName("cache_file") val cacheFile: CacheFileConfig? = null
-)
-
-@Keep
-data class ClashApiConfig(
-    @SerializedName("external_controller") val externalController: String? = null,
-    @SerializedName("external_ui") val externalUi: String? = null,
-    @SerializedName("secret") val secret: String? = null,
-    @SerializedName("default_mode") val defaultMode: String? = null
 )
 
 @Keep

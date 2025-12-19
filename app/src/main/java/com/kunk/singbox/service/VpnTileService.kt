@@ -1,13 +1,13 @@
 package com.kunk.singbox.service
 
-import android.app.ActivityManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
+import android.content.ServiceConnection
+import android.os.Build
+import android.os.IBinder
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
-import android.os.Build
 import com.kunk.singbox.R
 import com.kunk.singbox.repository.ConfigRepository
 import kotlinx.coroutines.CoroutineScope
@@ -21,6 +21,38 @@ import kotlinx.coroutines.launch
 class VpnTileService : TileService() {
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var stateObserverJob: Job? = null
+    @Volatile private var lastServiceState: SingBoxService.ServiceState = SingBoxService.ServiceState.STOPPED
+    private var boundService: SingBoxService? = null
+    private var serviceBound = false
+    private var tapPending = false
+    private val stateCallback = object : SingBoxService.StateCallback {
+        override fun onStateChanged(state: SingBoxService.ServiceState) {
+            lastServiceState = state
+            updateTile()
+        }
+    }
+    private val serviceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            val binder = service as? SingBoxService.LocalBinder ?: return
+            boundService = binder.getService()
+            boundService?.registerStateCallback(stateCallback)
+            serviceBound = true
+            lastServiceState = boundService?.getCurrentState() ?: SingBoxService.ServiceState.STOPPED
+            updateTile()
+            if (tapPending) {
+                tapPending = false
+                toggle()
+            }
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            boundService?.unregisterStateCallback(stateCallback)
+            boundService = null
+            serviceBound = false
+            lastServiceState = SingBoxService.ServiceState.STOPPED
+            updateTile()
+        }
+    }
 
     companion object {
         private const val PREFS_NAME = "vpn_state"
@@ -40,6 +72,7 @@ class VpnTileService : TileService() {
 
     override fun onStartListening() {
         super.onStartListening()
+        bindService()
         updateTile()
         
         // 订阅VPN状态变化，确保磁贴状态与实际VPN状态同步
@@ -57,164 +90,101 @@ class VpnTileService : TileService() {
         // 停止监听时取消订阅
         stateObserverJob?.cancel()
         stateObserverJob = null
+        unbindService()
     }
 
     override fun onClick() {
         super.onClick()
-        val tile = qsTile
-
-        val persistedState = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .getBoolean(KEY_VPN_ACTIVE, false)
-
-        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val hasSystemVpn = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            cm.allNetworks.any { network ->
-                val caps = cm.getNetworkCapabilities(network) ?: return@any false
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-            }
-        } else {
-            true
-        }
-
-        // If system has no VPN but persisted says active, this is almost certainly a stale tile after force-stop.
-        // First click should only clear persisted state + refresh the tile, never start VPN.
-        if (!hasSystemVpn && persistedState && !isSingBoxServiceRunning()) {
-            persistVpnState(this, false)
-            updateTile()
-            val intent = Intent(this, SingBoxService::class.java).apply {
-                action = SingBoxService.ACTION_STOP
-            }
-            startService(intent)
+        if (isLocked) {
+            unlockAndRun { toggle() }
             return
         }
-
-        // If another VPN is active, don't attempt to start ours from the tile.
-        if (hasSystemVpn && !persistedState && !isSingBoxServiceRunning()) {
-            updateTile()
-            return
-        }
-
-        val displayedActive = tile?.state == Tile.STATE_ACTIVE
-        val isRunning = isOurVpnActive()
-
-        // If QS tile UI is stale after force-stop, avoid toggling the VPN unexpectedly.
-        // 1) Tile shows ACTIVE but our VPN is not active: first click should only refresh to INACTIVE.
-        // 2) Tile shows INACTIVE but our VPN is active: first click should only refresh to ACTIVE.
-        if (displayedActive && !isRunning) {
-            persistVpnState(this, false)
-            updateTile()
-            return
-        }
-        
-        // Update tile state immediately for responsive feel
-        if (tile != null) {
-            tile.state = if (isRunning) Tile.STATE_INACTIVE else Tile.STATE_ACTIVE
-            tile.updateTile()
-        }
-
-        if (isRunning) {
-            persistVpnState(this, false)
-            val intent = Intent(this, SingBoxService::class.java).apply {
-                action = SingBoxService.ACTION_STOP
-            }
-            startService(intent)
-        } else {
-            persistVpnState(this, true)
-            serviceScope.launch {
-                val configRepository = ConfigRepository.getInstance(applicationContext)
-                val configPath = configRepository.generateConfigFile()
-                if (configPath != null) {
-                    val intent = Intent(this@VpnTileService, SingBoxService::class.java).apply {
-                        action = SingBoxService.ACTION_START
-                        putExtra(SingBoxService.EXTRA_CONFIG_PATH, configPath)
-                    }
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        startForegroundService(intent)
-                    } else {
-                        startService(intent)
-                    }
-                } else {
-                    persistVpnState(this@VpnTileService, false)
-                    // Revert tile state if start fails
-                    updateTile()
-                }
-            }
-        }
+        toggle()
     }
 
     private fun updateTile() {
         val tile = qsTile ?: return
-        val isRunning = isOurVpnActive()
-        tile.state = if (isRunning) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
+        when (lastServiceState) {
+            SingBoxService.ServiceState.STARTING,
+            SingBoxService.ServiceState.RUNNING -> {
+                tile.state = Tile.STATE_ACTIVE
+            }
+            SingBoxService.ServiceState.STOPPING -> {
+                tile.state = Tile.STATE_UNAVAILABLE
+            }
+            SingBoxService.ServiceState.STOPPED -> {
+                tile.state = Tile.STATE_INACTIVE
+            }
+        }
         tile.label = getString(R.string.app_name)
         try {
             tile.icon = android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_qs_tile)
-        } catch (e: Exception) {
-            // Fallback to manifest icon if something goes wrong
+        } catch (_: Exception) {
         }
         tile.updateTile()
     }
 
-    /**
-     * 检测我们的 VPN 是否活跃
-     *
-     * 使用三重验证：
-     * 1. 检查系统是否有活跃的 VPN 网络
-     * 2. 检查进程内的 SingBoxService.isRunning 状态
-     * 3. 检查持久化的 VPN 状态（用于进程重启后的状态恢复）
-     *
-     * 只有当系统确实有 VPN 网络时，才可能返回 true
-     */
-    private fun isOurVpnActive(): Boolean {
-        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-
-        // 首先检查系统是否有任何 VPN 网络
-        val hasSystemVpn = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            cm.allNetworks.any { network ->
-                val caps = cm.getNetworkCapabilities(network) ?: return@any false
-                caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+    private fun toggle() {
+        if (!serviceBound || boundService == null) {
+            tapPending = true
+            bindService()
+            return
+        }
+        lastServiceState = boundService?.getCurrentState() ?: lastServiceState
+        when (lastServiceState) {
+            SingBoxService.ServiceState.RUNNING,
+            SingBoxService.ServiceState.STARTING -> {
+                persistVpnState(this, false)
+                val intent = Intent(this, SingBoxService::class.java).apply {
+                    action = SingBoxService.ACTION_STOP
+                }
+                startService(intent)
             }
-        } else {
-            // Android M 以下，无法可靠检测，回退到进程内状态
-            true
+            SingBoxService.ServiceState.STOPPED -> {
+                persistVpnState(this, true)
+                serviceScope.launch {
+                    val configRepository = ConfigRepository.getInstance(applicationContext)
+                    val configPath = configRepository.generateConfigFile()
+                    if (configPath != null) {
+                        val intent = Intent(this@VpnTileService, SingBoxService::class.java).apply {
+                            action = SingBoxService.ACTION_START
+                            putExtra(SingBoxService.EXTRA_CONFIG_PATH, configPath)
+                        }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            startForegroundService(intent)
+                        } else {
+                            startService(intent)
+                        }
+                    } else {
+                        persistVpnState(this@VpnTileService, false)
+                        updateTile()
+                    }
+                }
+            }
+            SingBoxService.ServiceState.STOPPING -> {
+                updateTile()
+            }
         }
-
-        val persistedState = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .getBoolean(KEY_VPN_ACTIVE, false)
-
-        if (SingBoxService.isRunning || isSingBoxServiceRunning()) {
-            return true
-        }
-
-        // 如果系统没有 VPN 网络，一定不活跃
-        if (!hasSystemVpn) {
-            return persistedState
-        }
-
-        // 进程内状态为 false，但系统有 VPN 网络
-        // 这可能是其他 VPN 应用，或者我们的 VPN 刚刚关闭但网络还没断开
-        // 此时以系统网络状态为准，但需要持久化状态辅助判断
-        // 如果持久化状态也是 false，说明不是我们的 VPN
-        if (!persistedState) {
-            return false
-        }
-
-        // Persisted says active and system has VPN, but our in-process flag is false.
-        // This can happen due to process restart or stale prefs; we conservatively treat as active
-        // for tile display, but clicks will still self-correct via onClick stale handling.
-        return true
     }
 
-    private fun isSingBoxServiceRunning(): Boolean {
-        return runCatching {
-            val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return@runCatching false
-            @Suppress("DEPRECATION")
-            val running = am.getRunningServices(Int.MAX_VALUE)
-            running.any { it.service.className == SingBoxService::class.java.name }
-        }.getOrDefault(false)
+    private fun bindService() {
+        if (serviceBound) return
+        val intent = Intent(this, SingBoxService::class.java).apply {
+            action = SingBoxService.ACTION_SERVICE
+        }
+        bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+    }
+
+    private fun unbindService() {
+        if (!serviceBound) return
+        boundService?.unregisterStateCallback(stateCallback)
+        runCatching { unbindService(serviceConnection) }
+        boundService = null
+        serviceBound = false
     }
 
     override fun onDestroy() {
+        unbindService()
         serviceScope.cancel()
         super.onDestroy()
     }

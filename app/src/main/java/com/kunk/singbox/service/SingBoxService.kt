@@ -12,7 +12,11 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.ProxyInfo
 import android.net.VpnService
+import android.os.Binder
 import android.os.Build
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.os.SystemClock
@@ -39,6 +43,7 @@ import java.io.File
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.NetworkInterface
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicLong
 
 class SingBoxService : VpnService() {
@@ -61,6 +66,7 @@ class SingBoxService : VpnService() {
         const val ACTION_START = "com.kunk.singbox.START"
         const val ACTION_STOP = "com.kunk.singbox.STOP"
         const val ACTION_SWITCH_NODE = "com.kunk.singbox.SWITCH_NODE"
+        const val ACTION_SERVICE = "com.kunk.singbox.SERVICE"
         const val EXTRA_CONFIG_PATH = "config_path"
         
         @Volatile
@@ -135,6 +141,56 @@ class SingBoxService : VpnService() {
         }
     }
     
+    enum class ServiceState {
+        STOPPED,
+        STARTING,
+        RUNNING,
+        STOPPING
+    }
+
+    interface StateCallback {
+        fun onStateChanged(state: ServiceState)
+    }
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val stateCallbacks = CopyOnWriteArrayList<StateCallback>()
+    @Volatile private var serviceState: ServiceState = ServiceState.STOPPED
+
+    private val localBinder = LocalBinder()
+
+    inner class LocalBinder : Binder() {
+        fun getService(): SingBoxService = this@SingBoxService
+    }
+
+    override fun onBind(intent: Intent): IBinder? {
+        return if (intent.action == ACTION_SERVICE) {
+            localBinder
+        } else {
+            super.onBind(intent)
+        }
+    }
+
+    fun getCurrentState(): ServiceState = serviceState
+
+    fun registerStateCallback(callback: StateCallback) {
+        stateCallbacks.addIfAbsent(callback)
+        mainHandler.post { callback.onStateChanged(serviceState) }
+    }
+
+    fun unregisterStateCallback(callback: StateCallback) {
+        stateCallbacks.remove(callback)
+    }
+
+    private fun updateServiceState(state: ServiceState) {
+        if (serviceState == state) return
+        serviceState = state
+        mainHandler.post {
+            for (cb in stateCallbacks) {
+                cb.onStateChanged(state)
+            }
+        }
+    }
+
     private var vpnInterface: ParcelFileDescriptor? = null
     private var boxService: BoxService? = null
     private var currentSettings: AppSettings? = null
@@ -787,14 +843,18 @@ class SingBoxService : VpnService() {
                 return
             }
             
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1 && network != lastKnownNetwork) {
+            val linkProperties = connectivityManager?.getLinkProperties(network)
+            val interfaceName = linkProperties?.interfaceName ?: ""
+            val upstreamChanged = interfaceName.isNotEmpty() && interfaceName != defaultInterfaceName
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1 && (network != lastKnownNetwork || upstreamChanged)) {
                 setUnderlyingNetworks(arrayOf(network))
                 lastKnownNetwork = network
                 noPhysicalNetworkWarningLogged = false // 重置警告标志
                 postTunRebindJob?.cancel()
                 postTunRebindJob = null
-                Log.i(TAG, "Switched underlying network to $network")
-                
+                Log.i(TAG, "Switched underlying network to $network (upstream=$interfaceName)")
+
                 // Notify the core to reset its network stack and re-bind sockets
                 serviceScope.launch {
                     try {
@@ -805,9 +865,6 @@ class SingBoxService : VpnService() {
                     }
                 }
             }
-
-            val linkProperties = connectivityManager?.getLinkProperties(network)
-            val interfaceName = linkProperties?.interfaceName ?: ""
 
             val now = System.currentTimeMillis()
             if (
@@ -878,6 +935,7 @@ class SingBoxService : VpnService() {
                 isManuallyStopped = false
                 val configPath = intent.getStringExtra(EXTRA_CONFIG_PATH)
                 if (configPath != null) {
+                    updateServiceState(ServiceState.STARTING)
                     synchronized(this) {
                         if (isStarting) {
                             pendingStartConfigPath = configPath
@@ -908,6 +966,7 @@ class SingBoxService : VpnService() {
             ACTION_STOP -> {
                 Log.i(TAG, "Received ACTION_STOP (manual) -> stopping VPN")
                 isManuallyStopped = true
+                updateServiceState(ServiceState.STOPPING)
                 synchronized(this) {
                     pendingStartConfigPath = null
                 }
@@ -960,6 +1019,7 @@ class SingBoxService : VpnService() {
             isStarting = true
         }
 
+        updateServiceState(ServiceState.STARTING)
         setLastError(null)
         
         lastConfigPath = configPath
@@ -1028,6 +1088,7 @@ class SingBoxService : VpnService() {
                 setLastError(null)
                 Log.i(TAG, "SingBox VPN started successfully")
                 VpnTileService.persistVpnState(applicationContext, true)
+                updateServiceState(ServiceState.RUNNING)
                 updateTileState()
                 
             } catch (e: CancellationException) {
@@ -1040,6 +1101,7 @@ class SingBoxService : VpnService() {
                 setLastError(reason)
                 withContext(Dispatchers.Main) {
                     isRunning = false
+                    updateServiceState(ServiceState.STOPPED)
                     stopVpn(stopService = true)
                 }
                 // 启动失败后，尝试重试一次（如果是自动重连触发的，可能因为网络刚切换还不稳定）
@@ -1065,6 +1127,7 @@ class SingBoxService : VpnService() {
             }
             isStopping = true
         }
+        updateServiceState(ServiceState.STOPPING)
 
         val jobToJoin = startVpnJob
         startVpnJob = null
@@ -1130,6 +1193,7 @@ class SingBoxService : VpnService() {
                 }
                 Log.i(TAG, "VPN stopped")
                 VpnTileService.persistVpnState(applicationContext, false)
+                updateServiceState(ServiceState.STOPPED)
                 updateTileState()
             }
 

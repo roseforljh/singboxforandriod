@@ -20,3 +20,6 @@ keystore_base64.txt
 # 临时文件和解压目录
 temp_aar_extracted/
 SFA-1.12.13-universal/
+
+# Git submodule（无需上传，会通过 .gitmodules 自动拉取）
+sing-box/

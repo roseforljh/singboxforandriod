@@ -1906,7 +1906,8 @@ class ConfigRepository(private val context: Context) {
                     stack = settings.tunStack.name.lowercase(), // gvisor/system/mixed/lwip
                     sniff = true,
                     sniffOverrideDestination = true,
-                    sniffTimeout = "300ms"
+                    sniffTimeout = "100ms",
+                    tcpFastOpen = true
                 )
             )
         } else {
@@ -1919,7 +1920,8 @@ class ConfigRepository(private val context: Context) {
                     listenPort = 2080,
                     sniff = true,
                     sniffOverrideDestination = true,
-                    sniffTimeout = "300ms"
+                    sniffTimeout = "100ms",
+                    tcpFastOpen = true
                 )
             )
         }
@@ -1931,12 +1933,38 @@ class ConfigRepository(private val context: Context) {
         // 远程 DNS
         dnsServers.add(
             DnsServer(
+                tag = "google",
+                address = "https://8.8.8.8/dns-query"
+            )
+        )
+        dnsServers.add(
+            DnsServer(
+                tag = "cloudflare",
+                address = "https://1.1.1.1/dns-query"
+            )
+        )
+        dnsServers.add(
+            DnsServer(
                 tag = "remote",
                 address = settings.remoteDns
             )
         )
 
         // 本地 DNS
+        dnsServers.add(
+            DnsServer(
+                tag = "ali",
+                address = "223.5.5.5",
+                detour = "direct"
+            )
+        )
+        dnsServers.add(
+            DnsServer(
+                tag = "dnspod",
+                address = "119.29.29.29",
+                detour = "direct"
+            )
+        )
         dnsServers.add(
             DnsServer(
                 tag = "local",
@@ -1974,8 +2002,8 @@ class ConfigRepository(private val context: Context) {
         // 优化：代理类域名的 DNS 走 remote
         dnsRules.add(
             DnsRule(
-                geosite = listOf("geolocation-!cn", "google", "youtube", "telegram"),
-                server = "remote"
+                geosite = listOf("geolocation-!cn", "google", "youtube", "telegram", "github", "twitter", "netflix"),
+                server = "google"
             )
         )
 
@@ -1988,7 +2016,8 @@ class ConfigRepository(private val context: Context) {
                 DnsStrategy.ONLY_IPV4 -> "ipv4_only"
                 DnsStrategy.ONLY_IPV6 -> "ipv6_only"
             },
-            disableCache = !settings.dnsCacheEnabled
+            disableCache = !settings.dnsCacheEnabled,
+            independentCache = true
         )
         
         val rawOutbounds = baseConfig.outbounds
@@ -1996,7 +2025,12 @@ class ConfigRepository(private val context: Context) {
             Log.w(TAG, "No outbounds found in base config, adding defaults")
         }
         val fixedOutbounds = rawOutbounds?.map { outbound ->
-            fixOutboundForRuntime(outbound)
+            var fixed = fixOutboundForRuntime(outbound)
+            // 启用 TCP Fast Open
+            if (fixed.type in listOf("vless", "vmess", "trojan", "shadowsocks", "hysteria2", "hysteria", "anytls", "tuic")) {
+                fixed = fixed.copy(tcpFastOpen = true)
+            }
+            fixed
         }?.toMutableList() ?: mutableListOf()
         
         if (fixedOutbounds.none { it.tag == "direct" }) {
@@ -2086,6 +2120,11 @@ class ConfigRepository(private val context: Context) {
             
             // 运行时修复
             var fixedSourceOutbound = fixOutboundForRuntime(sourceOutbound)
+            
+            // 启用 TCP Fast Open
+            if (fixedSourceOutbound.type in listOf("vless", "vmess", "trojan", "shadowsocks", "hysteria2", "hysteria", "anytls", "tuic")) {
+                fixedSourceOutbound = fixedSourceOutbound.copy(tcpFastOpen = true)
+            }
             
             // 处理标签冲突
             var finalTag = fixedSourceOutbound.tag
@@ -2221,10 +2260,27 @@ class ConfigRepository(private val context: Context) {
             emptyList()
         }
 
+        // 局域网绕过规则
+        val bypassLanRules = if (settings.bypassLan) {
+            listOf(
+                RouteRule(
+                    ipCidr = listOf(
+                        "10.0.0.0/8",
+                        "172.16.0.0/12",
+                        "192.168.0.0/16",
+                        "fc00::/7"
+                    ),
+                    outbound = "direct"
+                )
+            )
+        } else {
+            emptyList()
+        }
+
         val allRules = listOf(
             // DNS 流量走 dns-out
             RouteRule(protocol = listOf("dns"), outbound = "dns-out")
-        ) + quicRule + appRoutingRules + adBlockRules + customRuleSetRules
+        ) + quicRule + bypassLanRules + appRoutingRules + adBlockRules + customRuleSetRules
         
         // 记录所有生成的路由规则
         Log.v(TAG, "=== Generated Route Rules (${allRules.size} total) ===")

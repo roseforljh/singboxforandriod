@@ -27,7 +27,8 @@ data class DnsConfig(
     @SerializedName("final") val finalServer: String? = null,
     @SerializedName("strategy") val strategy: String? = null,
     @SerializedName("disable_cache") val disableCache: Boolean? = null,
-    @SerializedName("disable_expire") val disableExpire: Boolean? = null
+    @SerializedName("disable_expire") val disableExpire: Boolean? = null,
+    @SerializedName("independent_cache") val independentCache: Boolean? = null
 )
 
 @Keep
@@ -67,7 +68,8 @@ data class Inbound(
     @SerializedName("stack") val stack: String? = null,
     @SerializedName("sniff") val sniff: Boolean? = null,
     @SerializedName("sniff_override_destination") val sniffOverrideDestination: Boolean? = null,
-    @SerializedName("sniff_timeout") val sniffTimeout: String? = null
+    @SerializedName("sniff_timeout") val sniffTimeout: String? = null,
+    @SerializedName("tcp_fast_open") val tcpFastOpen: Boolean? = null
 )
 
 @Keep
@@ -77,6 +79,7 @@ data class Outbound(
     
     @SerializedName("server") val server: String? = null,
     @SerializedName("server_port") val serverPort: Int? = null,
+    @SerializedName("tcp_fast_open") val tcpFastOpen: Boolean? = null,
     
     @SerializedName("outbounds") val outbounds: List<String>? = null,
     @SerializedName("default") val default: String? = null,

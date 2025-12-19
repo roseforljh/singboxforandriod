@@ -412,8 +412,14 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
                 
                 // 使用5秒超时包装整个测试过程
                 val delay = withTimeoutOrNull(5000L) {
+                    val settings = com.kunk.singbox.repository.SettingsRepository.getInstance(getApplication()).settings.first()
+                    val type = when (settings.latencyTestMethod) {
+                        com.kunk.singbox.model.LatencyTestMethod.TCP -> "tcp"
+                        com.kunk.singbox.model.LatencyTestMethod.HANDSHAKE -> "handshake"
+                        else -> "real"
+                    }
                     val clashApi = singBoxCore.getClashApiClient()
-                    clashApi.testProxyDelay(nodeName)
+                    clashApi.testProxyDelay(nodeName, type = type)
                 }
                 
                 // 测试完成，更新状态

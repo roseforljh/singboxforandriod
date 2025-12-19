@@ -115,7 +115,7 @@ class ClashApiClient(
                 ?.addQueryParameter("timeout", timeout.toString())
                 ?.addQueryParameter("url", testUrl)
                 ?.apply {
-                    if (type != "real") {
+                    if (type.isNotEmpty()) {
                         addQueryParameter("type", type)
                     }
                 }
@@ -160,10 +160,11 @@ class ClashApiClient(
         proxyNames: List<String>,
         testUrl: String = DEFAULT_TEST_URL,
         timeout: Long = DEFAULT_TIMEOUT,
+        type: String = "real",
         onResult: (name: String, delay: Long) -> Unit
     ) = withContext(Dispatchers.IO) {
         for (name in proxyNames) {
-            val delay = testProxyDelay(name, testUrl, timeout)
+            val delay = testProxyDelay(name, testUrl, timeout, type)
             onResult(name, delay)
         }
     }

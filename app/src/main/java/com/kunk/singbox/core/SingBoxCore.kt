@@ -213,26 +213,33 @@ class SingBoxCore private constructor(private val context: Context) {
                     }
                 }
 
-                // 最宽松匹配：仅要求前两个参数为 String 的静态方法
+                // 宽松匹配（安全版）：参数满足 (String,String,int/long[,Interface]) 的静态方法，且返回 long 或返回对象具备 delay 访问器
                 if (methodToUse == null) {
                     for (m in methods) {
                         val params = m.parameterTypes
-                        if (params.size >= 2 && params[0] == String::class.java && params[1] == String::class.java && Modifier.isStatic(m.modifiers)) {
+                        val okParams = (params.size == 3 || (params.size == 4 && params[3].isInterface)) &&
+                                params[0] == String::class.java && params[1] == String::class.java &&
+                                (params[2] == Long::class.javaPrimitiveType || params[2] == Int::class.javaPrimitiveType) &&
+                                Modifier.isStatic(m.modifiers)
+                        if (okParams) {
                             try {
                                 val pi = testPlatformInterface ?: TestPlatformInterface(context)
                                 val args = buildUrlTestArgs(params, outboundJson, url, pi)
-                                val result = m.invoke(null, *args)
-                                Log.i(TAG, "Invoked candidate native URL test method: ${m.name}(${params.joinToString { it.simpleName }}) -> ${m.returnType.simpleName}")
-                                return@withContext when {
-                                    m.returnType == Long::class.javaPrimitiveType -> result as Long
-                                    else -> extractDelayFromUrlTest(result, settings.latencyTestMethod)
+                                val rt = m.returnType
+                                if (rt == Long::class.javaPrimitiveType || hasDelayAccessors(rt)) {
+                                    val result = m.invoke(null, *args)
+                                    Log.i(TAG, "Invoked candidate native URL test method: ${m.name}(${params.joinToString { it.simpleName }}) -> ${rt.simpleName}")
+                                    return@withContext when {
+                                        rt == Long::class.javaPrimitiveType -> result as Long
+                                        else -> extractDelayFromUrlTest(result, settings.latencyTestMethod)
+                                    }
                                 }
                             } catch (_: Exception) { }
                         }
                     }
                     // 打印候选方法，便于诊断
                     try {
-                        val candidates = methods.filter { it.parameterTypes.size >= 2 && it.parameterTypes[0] == String::class.java && it.parameterTypes[1] == String::class.java && Modifier.isStatic(it.modifiers) }
+                        val candidates = methods.filter { (it.parameterTypes.size == 3 || (it.parameterTypes.size == 4 && it.parameterTypes[3].isInterface)) && it.parameterTypes[0] == String::class.java && it.parameterTypes[1] == String::class.java && (it.parameterTypes[2] == Long::class.javaPrimitiveType || it.parameterTypes[2] == Int::class.javaPrimitiveType) && Modifier.isStatic(it.modifiers) }
                         if (candidates.isNotEmpty()) {
                             Log.v(TAG, "Libbox static candidates: " + candidates.joinToString { it.name + "(" + it.parameterTypes.joinToString { p -> p.simpleName } + ") -> " + it.returnType.simpleName })
                         }
@@ -323,7 +330,7 @@ class SingBoxCore private constructor(private val context: Context) {
                         }
                     }
 
-                    // 最宽松匹配：仅要求前两个参数为 String 的实例方法
+                    // 宽松匹配（安全版）：参数满足 (String,String,int/long[,Interface]) 的实例方法，且返回 long 或返回对象具备 delay 访问器
                     ensureLibboxSetup(context)
                     val pi = testPlatformInterface ?: TestPlatformInterface(context)
                     val minimalConfig = SingBoxConfig(
@@ -335,21 +342,28 @@ class SingBoxCore private constructor(private val context: Context) {
                         try { service.start() } catch (_: Exception) {}
                         for (m in instanceMethods) {
                             val params = m.parameterTypes
-                            if (params.size >= 2 && params[0] == String::class.java && params[1] == String::class.java && !Modifier.isStatic(m.modifiers)) {
+                            val okParams = (params.size == 3 || (params.size == 4 && params[3].isInterface)) &&
+                                    params[0] == String::class.java && params[1] == String::class.java &&
+                                    (params[2] == Long::class.javaPrimitiveType || params[2] == Int::class.javaPrimitiveType) &&
+                                    !Modifier.isStatic(m.modifiers)
+                            if (okParams) {
                                 try {
                                     val args = buildUrlTestArgs(params, outboundJson, url, pi)
-                                    val result = m.invoke(service, *args)
-                                    Log.i(TAG, "Invoked BoxService candidate method: ${m.name}(${params.joinToString { it.simpleName }}) -> ${m.returnType.simpleName}")
-                                    return@withContext when {
-                                        m.returnType == Long::class.javaPrimitiveType -> result as Long
-                                        else -> extractDelayFromUrlTest(result, settings.latencyTestMethod)
+                                    val rt = m.returnType
+                                    if (rt == Long::class.javaPrimitiveType || hasDelayAccessors(rt)) {
+                                        val result = m.invoke(service, *args)
+                                        Log.i(TAG, "Invoked BoxService candidate method: ${m.name}(${params.joinToString { it.simpleName }}) -> ${rt.simpleName}")
+                                        return@withContext when {
+                                            rt == Long::class.javaPrimitiveType -> result as Long
+                                            else -> extractDelayFromUrlTest(result, settings.latencyTestMethod)
+                                        }
                                     }
                                 } catch (_: Exception) { }
                             }
                         }
                         // 打印候选实例方法
                         try {
-                            val candidates = instanceMethods.filter { it.parameterTypes.size >= 2 && it.parameterTypes[0] == String::class.java && it.parameterTypes[1] == String::class.java && !Modifier.isStatic(it.modifiers) }
+                            val candidates = instanceMethods.filter { (it.parameterTypes.size == 3 || (it.parameterTypes.size == 4 && it.parameterTypes[3].isInterface)) && it.parameterTypes[0] == String::class.java && it.parameterTypes[1] == String::class.java && (it.parameterTypes[2] == Long::class.javaPrimitiveType || it.parameterTypes[2] == Int::class.javaPrimitiveType) && !Modifier.isStatic(it.modifiers) }
                             if (candidates.isNotEmpty()) {
                                 Log.v(TAG, "BoxService instance candidates: " + candidates.joinToString { it.name + "(" + it.parameterTypes.joinToString { p -> p.simpleName } + ") -> " + it.returnType.simpleName })
                             }
@@ -431,6 +445,39 @@ class SingBoxCore private constructor(private val context: Context) {
         if (valueByMode != null) return valueByMode
         // 最后通用兜底
         return tryGet(arrayOf("delay", "getDelay")) ?: -1L
+    }
+
+    private fun hasDelayAccessors(rt: Class<*>): Boolean {
+        val methodNames = arrayOf(
+            "delay", "getDelay", "rtt", "latency", "getLatency",
+            "tcpDelay", "getTcpDelay", "connectDelay", "getConnectDelay",
+            "handshakeDelay", "getHandshakeDelay", "tlsDelay", "getTlsDelay"
+        )
+        try {
+            for (name in methodNames) {
+                try {
+                    val m = rt.getMethod(name)
+                    val rtpe = m.returnType
+                    if ((rtpe == Long::class.javaPrimitiveType || rtpe == Long::class.java ||
+                                rtpe == Int::class.javaPrimitiveType || rtpe == Int::class.java) && m.parameterCount == 0) {
+                        return true
+                    }
+                } catch (_: Exception) { }
+            }
+        } catch (_: Exception) { }
+        try {
+            val fields = rt.declaredFields
+            for (f in fields) {
+                if (methodNames.any { it.equals(f.name, ignoreCase = true) }) {
+                    val t = f.type
+                    if (t == Long::class.javaPrimitiveType || t == Long::class.java ||
+                        t == Int::class.javaPrimitiveType || t == Int::class.java) {
+                        return true
+                    }
+                }
+            }
+        } catch (_: Exception) { }
+        return false
     }
 
     private fun buildUrlTestArgs(

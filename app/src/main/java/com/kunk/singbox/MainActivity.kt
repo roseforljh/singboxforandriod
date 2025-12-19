@@ -62,12 +62,15 @@ import com.kunk.singbox.repository.SettingsRepository
 import com.kunk.singbox.viewmodel.DashboardViewModel
 import com.kunk.singbox.model.ConnectionState
 import com.kunk.singbox.service.SingBoxService
+import com.kunk.singbox.service.VpnTileService
 import com.kunk.singbox.ui.components.AppNavBar
 import com.kunk.singbox.ui.navigation.AppNavigation
 import com.kunk.singbox.ui.navigation.NAV_ANIMATION_DURATION
 import com.kunk.singbox.ui.theme.OLEDBlack
 import com.kunk.singbox.ui.theme.PureWhite
 import com.kunk.singbox.ui.theme.SingBoxTheme
+import android.content.ComponentName
+import android.service.quicksettings.TileService
 import androidx.work.WorkManager
 import com.kunk.singbox.worker.RuleSetUpdateWorker
 import kotlinx.coroutines.delay
@@ -104,6 +107,10 @@ fun SingBoxApp() {
     )
 
     LaunchedEffect(Unit) {
+        // Best-effort: ask system to refresh QS tile state after app process restarts/force-stops.
+        runCatching {
+            TileService.requestListeningState(context, ComponentName(context, VpnTileService::class.java))
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val permission = ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
             Log.d("SingBoxActivity", "POST_NOTIFICATIONS permission status: $permission (Granted: ${permission == PackageManager.PERMISSION_GRANTED})")

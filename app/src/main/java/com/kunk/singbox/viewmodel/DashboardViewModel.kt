@@ -1,8 +1,11 @@
 package com.kunk.singbox.viewmodel
 
 import android.app.Application
+import android.content.Context
 import android.content.Intent
 import android.net.VpnService
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.SystemClock
 import android.util.Log
@@ -11,9 +14,11 @@ import androidx.lifecycle.viewModelScope
 import com.kunk.singbox.model.ConnectionState
 import com.kunk.singbox.model.ConnectionStats
 import com.kunk.singbox.model.ProfileUi
+import com.kunk.singbox.repository.SettingsRepository
+import com.kunk.singbox.service.SingBoxService
+import com.kunk.singbox.service.VpnTileService
 import com.kunk.singbox.core.SingBoxCore
 import com.kunk.singbox.repository.ConfigRepository
-import com.kunk.singbox.service.SingBoxService
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -138,6 +143,35 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     val vpnPermissionNeeded: StateFlow<Boolean> = _vpnPermissionNeeded.asStateFlow()
     
     init {
+        // Best-effort initial sync for UI state after process restart/force-stop.
+        // We rely on system VPN presence + persisted state, and clear stale persisted state.
+        runCatching {
+            val context = getApplication<Application>()
+            val cm = context.getSystemService(ConnectivityManager::class.java)
+            val hasSystemVpn = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                cm?.allNetworks?.any { network ->
+                    val caps = cm.getNetworkCapabilities(network) ?: return@any false
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                } == true
+            } else {
+                false
+            }
+            val persisted = context.getSharedPreferences("vpn_state", Context.MODE_PRIVATE)
+                .getBoolean("vpn_active", false)
+
+            if (!hasSystemVpn && persisted) {
+                VpnTileService.persistVpnState(context, false)
+            }
+
+            if (hasSystemVpn && persisted) {
+                // If process restarted while VPN is still up, show as connected until flows catch up.
+                _connectionState.value = ConnectionState.Connected
+                _connectedAtElapsedMs.value = SystemClock.elapsedRealtime()
+            } else if (!SingBoxService.isStarting) {
+                _connectionState.value = ConnectionState.Idle
+            }
+        }
+
         // Observe SingBoxService running and starting state to keep UI in sync
         viewModelScope.launch {
             SingBoxService.isRunningFlow.collect { running ->

@@ -82,6 +82,9 @@ class SingBoxCore private constructor(private val context: Context) {
         private const val TEST_SERVICE_KEEP_ALIVE_MS = 30_000L // 保活 30 秒
 
         private val libboxSetupDone = AtomicBoolean(false)
+        // 最近一次原生测速预热时间（避免每次都预热）
+        @Volatile
+        private var lastNativeWarmupAt: Long = 0
         
         @Volatile
         private var instance: SingBoxCore? = null
@@ -155,6 +158,27 @@ class SingBoxCore private constructor(private val context: Context) {
      */
     fun isLibboxAvailable(): Boolean = libboxAvailable
 
+    private fun maybeWarmupNative(libboxClass: Class<*>, url: String) {
+        val now = System.currentTimeMillis()
+        if (now - lastNativeWarmupAt < 1200L) return
+        try {
+            val m = libboxClass.methods.firstOrNull { method ->
+                Modifier.isStatic(method.modifiers)
+                        && method.parameterTypes.size == 3
+                        && method.parameterTypes[0] == String::class.java
+                        && method.parameterTypes[1] == String::class.java
+                        && (method.parameterTypes[2] == Long::class.javaPrimitiveType || method.parameterTypes[2] == Int::class.javaPrimitiveType)
+                        && method.name.endsWith("urlTestOnRunning", ignoreCase = true)
+            } ?: return
+            // 仅传 tag=direct 进行一次快速预热，忽略结果
+            val outboundJson = "{" + "\"tag\":\"direct\"" + "}"
+            try {
+                m.invoke(null, outboundJson, url, 1000L)
+            } catch (_: Exception) { }
+            lastNativeWarmupAt = System.currentTimeMillis()
+        } catch (_: Exception) { }
+    }
+
     /**
      * 使用 Libbox 原生方法进行延迟测试
      * 自动尝试多种可能的签名并记录发现的方法
@@ -165,6 +189,13 @@ class SingBoxCore private constructor(private val context: Context) {
         try {
             val finalSettings = settings ?: SettingsRepository.getInstance(context).settings.first()
             val url = adjustUrlForMode(finalSettings.latencyTestUrl, finalSettings.latencyTestMethod)
+            val fallbackUrl = try {
+                if (finalSettings.latencyTestMethod == com.kunk.singbox.model.LatencyTestMethod.TCP) {
+                    adjustUrlForMode("http://cp.cloudflare.com/generate_204", finalSettings.latencyTestMethod)
+                } else {
+                    adjustUrlForMode("https://cp.cloudflare.com/generate_204", finalSettings.latencyTestMethod)
+                }
+            } catch (_: Exception) { url }
             val timeout = 5000L
             val outboundJson = gson.toJson(outbound)
             
@@ -173,6 +204,8 @@ class SingBoxCore private constructor(private val context: Context) {
             // Prefer running-instance native URL test when VPN is running
             if (SingBoxService.isRunning) {
                 try {
+                    // 先做一次轻量预热，规避 VPN link 验证/路由冷启动瞬态
+                    maybeWarmupNative(libboxClass, url)
                     val runningMethods = libboxClass.methods.filter { m ->
                         Modifier.isStatic(m.modifiers)
                                 && m.parameterTypes.size == 3
@@ -189,13 +222,31 @@ class SingBoxCore private constructor(private val context: Context) {
                                 return@withContext r
                             }
                             // One quick retry for transient states (route selection, DNS warmup)
-                            delay(150)
+                            delay(250)
                             r = m.invoke(null, outboundJson, url, 5000L) as Long
                             if (r >= 0) {
                                 Log.i(TAG, "Invoked running-instance native URL test (retry): ${m.name} -> $r ms")
                                 return@withContext r
                             }
                         } catch (_: Exception) { }
+                    }
+                    // Fallback URL once if initial attempts failed
+                    if (fallbackUrl != url) {
+                        for (m in runningMethods) {
+                            try {
+                                var r = m.invoke(null, outboundJson, fallbackUrl, 5000L) as Long
+                                if (r >= 0) {
+                                    Log.i(TAG, "Invoked running-instance native URL test (fallback URL): ${m.name} -> $r ms")
+                                    return@withContext r
+                                }
+                                delay(250)
+                                r = m.invoke(null, outboundJson, fallbackUrl, 5000L) as Long
+                                if (r >= 0) {
+                                    Log.i(TAG, "Invoked running-instance native URL test (fallback URL retry): ${m.name} -> $r ms")
+                                    return@withContext r
+                                }
+                            } catch (_: Exception) { }
+                        }
                     }
                 } catch (_: Exception) { }
             }
@@ -264,6 +315,32 @@ class SingBoxCore private constructor(private val context: Context) {
                                     }
                                 }
                             } catch (_: Exception) { }
+                        }
+                    }
+
+                    // 使用备用 URL 再尝试一次静态原生方法
+                    if (fallbackUrl != url) {
+                        for (m in methods) {
+                            val params = m.parameterTypes
+                            val okParams = (params.size == 3 || (params.size == 4 && params[3].isInterface)) &&
+                                    params[0] == String::class.java && params[1] == String::class.java &&
+                                    (params[2] == Long::class.javaPrimitiveType || params[2] == Int::class.javaPrimitiveType) &&
+                                    Modifier.isStatic(m.modifiers)
+                            if (okParams) {
+                                try {
+                                    val pi = testPlatformInterface ?: TestPlatformInterface(context)
+                                    val args = buildUrlTestArgs(params, outboundJson, fallbackUrl, pi)
+                                    val rt = m.returnType
+                                    if (rt == Long::class.javaPrimitiveType || hasDelayAccessors(rt)) {
+                                        val result = m.invoke(null, *args)
+                                        Log.i(TAG, "Invoked static native URL test method (fallback URL): ${m.name}(${params.joinToString { it.simpleName }}) -> ${rt.simpleName}")
+                                        return@withContext when {
+                                            rt == Long::class.javaPrimitiveType -> result as Long
+                                            else -> extractDelayFromUrlTest(result, finalSettings.latencyTestMethod)
+                                        }
+                                    }
+                                } catch (_: Exception) { }
+                            }
                         }
                     }
                     
@@ -610,26 +687,27 @@ class SingBoxCore private constructor(private val context: Context) {
     suspend fun testOutboundLatency(outbound: Outbound): Long = withContext(Dispatchers.IO) {
         val settings = SettingsRepository.getInstance(context).settings.first()
         
-        // 如果 VPN 正在运行，优先使用 Clash API，因为它不需要启动新实例，最可靠
-        if (SingBoxService.isRunning) {
+        // 当 VPN 正在运行且启用了原生测速，优先使用运行实例原生 URLTest
+        if (SingBoxService.isRunning && settings.useLibboxUrlTest) {
+            val nativeLatency = testOutboundLatencyWithLibbox(outbound, settings)
+            if (nativeLatency >= 0) return@withContext nativeLatency
+            // 原生失败时，回退到 Clash API，提升成功率
             clashApiClient.setBaseUrl("http://127.0.0.1:9090")
-            val latency = testOutboundLatencyWithClashApi(outbound)
-            if (latency > 0) return@withContext latency
-            // 如果 Clash API 失败且启用了原生测试，则尝试原生测试
-            if (settings.useLibboxUrlTest) {
-                return@withContext testOutboundLatencyWithLibbox(outbound, settings)
-            }
-            return@withContext latency
+            return@withContext testOutboundLatencyWithClashApi(outbound)
         }
-        
-        // VPN 未运行时
-        if (settings.useLibboxUrlTest) {
-            return@withContext testOutboundLatencyWithLibbox(outbound, settings)
-        }
-        
+
+        // VPN 未运行时：为稳定起见，优先使用临时服务 + Clash API；仅在设置关闭原生时也走 Clash API
         try {
             ensureTestServiceRunning(listOf(outbound))
-            testOutboundLatencyWithClashApi(outbound)
+            var clashLatency = testOutboundLatencyWithClashApi(outbound)
+            if (clashLatency < 0 && settings.useLibboxUrlTest) {
+                // 服务可能尚在启动，等待片刻再试一次
+                delay(250)
+                clashLatency = testOutboundLatencyWithClashApi(outbound)
+            }
+            if (clashLatency >= 0 || !settings.useLibboxUrlTest) return@withContext clashLatency
+            // Clash API 仍失败且开启原生，则再尝试原生静态路径
+            return@withContext testOutboundLatencyWithLibbox(outbound, settings)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to test latency with temporary service", e)
             -1L
@@ -651,20 +729,26 @@ class SingBoxCore private constructor(private val context: Context) {
     ) = withContext(Dispatchers.IO) {
         val settings = SettingsRepository.getInstance(context).settings.first()
         
-        // 如果 VPN 正在运行，强制使用 Clash API 进行批量测试，因为它最稳定且效率最高
-        if (SingBoxService.isRunning) {
-            performClashApiBatchTest(outbounds, onResult)
-            return@withContext
-        }
-
-        // VPN 未运行时，如果启用了 Libbox 原生测速
-        if (libboxAvailable && settings.useLibboxUrlTest) {
-            val semaphore = Semaphore(permits = 10)
+        // 优先使用原生 URLTest（运行实例路径，降低并发至 6），对 -1 做 Clash API 回退
+        if (libboxAvailable && settings.useLibboxUrlTest && SingBoxService.isRunning) {
+            // 先做一次轻量预热，避免批量首个请求落在 link 验证/路由冷启动窗口
+            try {
+                val libboxClass = Class.forName("io.nekohasekai.libbox.Libbox")
+                val url = adjustUrlForMode(settings.latencyTestUrl, settings.latencyTestMethod)
+                maybeWarmupNative(libboxClass, url)
+            } catch (_: Exception) { }
+            val semaphore = Semaphore(permits = 6)
             coroutineScope {
                 val jobs = outbounds.map { outbound ->
                     async {
                         semaphore.withPermit {
-                            val latency = testOutboundLatencyWithLibbox(outbound, settings)
+                            var latency = testOutboundLatencyWithLibbox(outbound, settings)
+                            if (latency < 0) {
+                                try {
+                                    clashApiClient.setBaseUrl("http://127.0.0.1:9090")
+                                    latency = testOutboundLatencyWithClashApi(outbound)
+                                } catch (_: Exception) {}
+                            }
                             onResult(outbound.tag, latency)
                         }
                     }
@@ -673,7 +757,13 @@ class SingBoxCore private constructor(private val context: Context) {
             }
             return@withContext
         }
-        
+
+        // 其它情况按 Clash API 路径
+        if (SingBoxService.isRunning) {
+            performClashApiBatchTest(outbounds, onResult)
+            return@withContext
+        }
+
         // 默认使用临时服务的 Clash API 批量测试
         performClashApiBatchTest(outbounds, onResult)
     }

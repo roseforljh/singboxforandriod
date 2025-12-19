@@ -154,6 +154,7 @@ class SingBoxService : VpnService() {
     @Volatile private var stopSelfRequested: Boolean = false
     @Volatile private var pendingStartConfigPath: String? = null
     @Volatile private var connectionOwnerPermissionDeniedLogged = false
+    @Volatile private var startVpnJob: Job? = null
 
     @Volatile private var lastRuleSetCheckMs: Long = 0L
     private val ruleSetCheckIntervalMs: Long = 6 * 60 * 60 * 1000L
@@ -162,6 +163,7 @@ class SingBoxService : VpnService() {
     private var connectivityManager: ConnectivityManager? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var vpnNetworkCallback: ConnectivityManager.NetworkCallback? = null
+    private var nativeUrlTestWarmupJob: Job? = null
     private var currentInterfaceListener: InterfaceUpdateListener? = null
     private var defaultInterfaceName: String = ""
     private var lastKnownNetwork: Network? = null
@@ -172,6 +174,11 @@ class SingBoxService : VpnService() {
     private var lastAutoReconnectAttemptMs: Long = 0L
     private val autoReconnectDebounceMs: Long = 10000L
     private var autoReconnectJob: Job? = null
+    
+    // 网络就绪标志：确保 Libbox 启动前网络回调已完成初始采样
+    @Volatile private var networkCallbackReady: Boolean = false
+    @Volatile private var noPhysicalNetworkWarningLogged: Boolean = false
+    @Volatile private var postTunRebindJob: Job? = null
     
     // Platform interface implementation
     private val platformInterface = object : PlatformInterface {
@@ -329,18 +336,31 @@ class SingBoxService : VpnService() {
             
             // 设置底层网络 - 关键！让 VPN 流量可以通过物理网络出去
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
-                val activePhysicalNetwork = lastKnownNetwork ?: connectivityManager?.activeNetwork?.takeIf {
-                    val caps = connectivityManager?.getNetworkCapabilities(it)
-                    caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
-                    caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) == true
-                }
+                val activePhysicalNetwork = findBestPhysicalNetwork()
                 
                 if (activePhysicalNetwork != null) {
+                    val caps = connectivityManager?.getNetworkCapabilities(activePhysicalNetwork)
+                    val capsStr = buildString {
+                        if (caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true) append("INTERNET ")
+                        if (caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) == true) append("NOT_VPN ")
+                        if (caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true) append("VALIDATED ")
+                        if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true) append("WIFI ")
+                        if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true) append("CELLULAR ")
+                    }
                     builder.setUnderlyingNetworks(arrayOf(activePhysicalNetwork))
-                    Log.i(TAG, "Set underlying network: $activePhysicalNetwork")
+                    Log.i(TAG, "Set underlying network: $activePhysicalNetwork (caps: $capsStr)")
+                    com.kunk.singbox.repository.LogRepository.getInstance()
+                        .addLog("INFO openTun: underlying network = $activePhysicalNetwork ($capsStr)")
                 } else {
-                    Log.w(TAG, "No physical network found for underlying networks")
+                    // 无物理网络，记录一次性警告
+                    if (!noPhysicalNetworkWarningLogged) {
+                        noPhysicalNetworkWarningLogged = true
+                        Log.w(TAG, "No physical network found for underlying networks - VPN may not work correctly!")
+                        com.kunk.singbox.repository.LogRepository.getInstance()
+                            .addLog("WARN openTun: No physical network found - traffic may be blackholed!")
+                    }
                     builder.setUnderlyingNetworks(null) // Let system decide
+                    schedulePostTunRebind("openTun_no_physical")
                 }
             }
             
@@ -485,6 +505,7 @@ class SingBoxService : VpnService() {
                     val isVpn = caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
                     Log.i(TAG, "Network available: $network (isVpn=$isVpn)")
                     if (!isVpn) {
+                        networkCallbackReady = true
                         updateDefaultInterface(network)
                     }
                 }
@@ -501,6 +522,7 @@ class SingBoxService : VpnService() {
                     val isVpn = caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
                     Log.v(TAG, "Network capabilities changed: $network (isVpn=$isVpn)")
                     if (!isVpn) {
+                        networkCallbackReady = true
                         updateDefaultInterface(network)
                     }
                 }
@@ -513,7 +535,7 @@ class SingBoxService : VpnService() {
             
             connectivityManager?.registerNetworkCallback(request, networkCallback!!)
 
-            // VPN Health Monitor
+            // VPN Health Monitor with enhanced rebind logic
             vpnNetworkCallback = object : ConnectivityManager.NetworkCallback() {
                 override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
                     if (!isRunning) return
@@ -523,6 +545,32 @@ class SingBoxService : VpnService() {
                             Log.i(TAG, "VPN link validated, cancelling recovery job")
                             vpnHealthJob?.cancel()
                         }
+                        // One-time warmup for native URLTest to avoid cold-start -1 on Nodes page
+                        if (nativeUrlTestWarmupJob?.isActive != true) {
+                            nativeUrlTestWarmupJob = serviceScope.launch {
+                                try {
+                                    // Slightly delay after validation to avoid cold DNS/route window
+                                    delay(800)
+                                    val repo = com.kunk.singbox.repository.ConfigRepository.getInstance(this@SingBoxService)
+                                    val activeNodeId = repo.activeNodeId.value
+                                    if (activeNodeId.isNullOrBlank()) {
+                                        Log.i(TAG, "Native URLTest warmup skipped: no active node")
+                                        return@launch
+                                    }
+                                    val nodeName = repo.nodes.value.find { it.id == activeNodeId }?.name
+                                    val r1 = withTimeoutOrNull(3000L) { repo.testNodeLatency(activeNodeId) } ?: -1L
+                                    Log.i(TAG, "Native URLTest warmup done(validated): ${nodeName ?: activeNodeId} -> $r1 ms")
+                                    if (r1 < 0) {
+                                        // Second-chance warmup for devices that still need a bit more time
+                                        delay(1000)
+                                        val r2 = withTimeoutOrNull(3000L) { repo.testNodeLatency(activeNodeId) } ?: -1L
+                                        Log.i(TAG, "Native URLTest warmup done(validated-2nd): ${nodeName ?: activeNodeId} -> $r2 ms")
+                                    }
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Native URLTest warmup failed", e)
+                                }
+                            }
+                        }
                     } else {
                         // Start a delayed recovery if not already running
                         if (vpnHealthJob?.isActive != true) {
@@ -530,9 +578,19 @@ class SingBoxService : VpnService() {
                             vpnHealthJob = serviceScope.launch {
                                 delay(5000)
                                 if (isRunning && !isStarting && !isStopping) {
-                                    Log.w(TAG, "VPN link still not validated after 5s, resetting network stack")
+                                    Log.w(TAG, "VPN link still not validated after 5s, attempting rebind and reset")
                                     try {
+                                        // 尝试重新绑定底层网络
+                                        val bestNetwork = findBestPhysicalNetwork()
+                                        if (bestNetwork != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
+                                            setUnderlyingNetworks(arrayOf(bestNetwork))
+                                            lastKnownNetwork = bestNetwork
+                                            Log.i(TAG, "Rebound underlying network to $bestNetwork during health recovery")
+                                            com.kunk.singbox.repository.LogRepository.getInstance()
+                                                .addLog("INFO VPN health recovery: rebound to $bestNetwork")
+                                        }
                                         boxService?.resetNetwork()
+                                        Log.d(TAG, "Core network stack reset triggered during health recovery")
                                     } catch (e: Exception) {
                                         Log.e(TAG, "Failed to reset network stack during health recovery", e)
                                     }
@@ -544,6 +602,7 @@ class SingBoxService : VpnService() {
 
                 override fun onLost(network: Network) {
                     vpnHealthJob?.cancel()
+                    nativeUrlTestWarmupJob?.cancel()
                 }
             }
 
@@ -558,8 +617,16 @@ class SingBoxService : VpnService() {
                 Log.w(TAG, "Failed to register VPN network callback", e)
             }
             
-            // Get current default interface
-            connectivityManager?.activeNetwork?.let { updateDefaultInterface(it) }
+            // Get current default interface - 立即采样一次以初始化 lastKnownNetwork
+            val activeNet = connectivityManager?.activeNetwork
+            if (activeNet != null) {
+                val caps = connectivityManager?.getNetworkCapabilities(activeNet)
+                val isVpn = caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+                if (!isVpn && caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true) {
+                    networkCallbackReady = true
+                    updateDefaultInterface(activeNet)
+                }
+            }
         }
         
         override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) {
@@ -575,9 +642,12 @@ class SingBoxService : VpnService() {
                 } catch (_: Exception) {}
             }
             vpnHealthJob?.cancel()
+            postTunRebindJob?.cancel()
+            postTunRebindJob = null
             vpnNetworkCallback = null
             networkCallback = null
             currentInterfaceListener = null
+            networkCallbackReady = false
         }
         
         override fun getInterfaces(): NetworkInterfaceIterator? {
@@ -661,11 +731,76 @@ class SingBoxService : VpnService() {
         override fun len(): Int = list.size
     }
     
+    /**
+     * 查找最佳物理网络（非 VPN、有 Internet 能力，优先 VALIDATED）
+     */
+    private fun findBestPhysicalNetwork(): Network? {
+        val cm = connectivityManager ?: return null
+        
+        // 优先使用已缓存的 lastKnownNetwork（如果仍然有效）
+        lastKnownNetwork?.let { cached ->
+            val caps = cm.getNetworkCapabilities(cached)
+            if (caps != null &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+            ) {
+                return cached
+            }
+        }
+        
+        // 遍历所有网络，筛选物理网络
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            val allNetworks = cm.allNetworks
+            var bestNetwork: Network? = null
+            var bestValidated = false
+            
+            for (net in allNetworks) {
+                val caps = cm.getNetworkCapabilities(net) ?: continue
+                val hasInternet = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                val notVpn = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                val validated = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+                
+                if (hasInternet && notVpn) {
+                    if (validated) {
+                        // 找到一个 VALIDATED 的，直接返回
+                        return net
+                    }
+                    if (bestNetwork == null || !bestValidated) {
+                        bestNetwork = net
+                        bestValidated = validated
+                    }
+                }
+            }
+            
+            if (bestNetwork != null) return bestNetwork
+        }
+        
+        // fallback: 使用 activeNetwork
+        return cm.activeNetwork?.takeIf {
+            val caps = cm.getNetworkCapabilities(it)
+            caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) == true
+        }
+    }
+    
     private fun updateDefaultInterface(network: Network) {
         try {
+            // 验证网络是否为有效的物理网络
+            val caps = connectivityManager?.getNetworkCapabilities(network)
+            val isValidPhysical = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
+                                  caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) == true
+            
+            if (!isValidPhysical) {
+                Log.v(TAG, "updateDefaultInterface: network $network is not a valid physical network, skipping")
+                return
+            }
+            
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1 && network != lastKnownNetwork) {
                 setUnderlyingNetworks(arrayOf(network))
                 lastKnownNetwork = network
+                noPhysicalNetworkWarningLogged = false // 重置警告标志
+                postTunRebindJob?.cancel()
+                postTunRebindJob = null
                 Log.i(TAG, "Switched underlying network to $network")
                 
                 // Notify the core to reset its network stack and re-bind sockets
@@ -745,27 +880,49 @@ class SingBoxService : VpnService() {
     }
     
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        Log.i(TAG, "onStartCommand action=${intent?.action}")
         when (intent?.action) {
             ACTION_START -> {
                 isManuallyStopped = false
                 val configPath = intent.getStringExtra(EXTRA_CONFIG_PATH)
                 if (configPath != null) {
                     synchronized(this) {
+                        if (isStarting) {
+                            pendingStartConfigPath = configPath
+                            stopSelfRequested = false
+                            lastConfigPath = configPath
+                            return START_STICKY
+                        }
                         if (isStopping) {
                             pendingStartConfigPath = configPath
                             stopSelfRequested = false
                             lastConfigPath = configPath
                             return START_STICKY
                         }
+                        // If already running, do a clean restart to avoid half-broken tunnel state
+                        if (isRunning) {
+                            pendingStartConfigPath = configPath
+                            stopSelfRequested = false
+                            lastConfigPath = configPath
+                        }
                     }
-                    startVpn(configPath)
+                    if (isRunning) {
+                        stopVpn(stopService = false)
+                    } else {
+                        startVpn(configPath)
+                    }
                 }
             }
             ACTION_STOP -> {
+                Log.i(TAG, "Received ACTION_STOP (manual) -> stopping VPN")
                 isManuallyStopped = true
+                synchronized(this) {
+                    pendingStartConfigPath = null
+                }
                 stopVpn(stopService = true)
             }
             ACTION_SWITCH_NODE -> {
+                Log.i(TAG, "Received ACTION_SWITCH_NODE -> switching node")
                 switchNextNode()
             }
         }
@@ -822,8 +979,13 @@ class SingBoxService : VpnService() {
             Log.e(TAG, "Failed to call startForeground", e)
         }
         
-        serviceScope.launch {
+        startVpnJob?.cancel()
+        startVpnJob = serviceScope.launch {
             try {
+                // 0. 预先注册网络回调，确保 lastKnownNetwork 就绪
+                // 这一步必须在 Libbox 启动前完成，避免 openTun() 时没有有效的底层网络
+                ensureNetworkCallbackReadyWithTimeout()
+                
                 // 1. 确保规则集就绪（预下载）
                 // 即使下载失败也继续启动，使用旧缓存或空文件，避免阻塞启动
                 try {
@@ -872,8 +1034,13 @@ class SingBoxService : VpnService() {
                 isRunning = true
                 setLastError(null)
                 Log.i(TAG, "SingBox VPN started successfully")
+                VpnTileService.persistVpnState(applicationContext, true)
                 updateTileState()
                 
+            } catch (e: CancellationException) {
+                Log.i(TAG, "startVpn cancelled")
+                // Do not treat cancellation as failure. stopVpn() is already responsible for cleanup.
+                return@launch
             } catch (e: Exception) {
                 val reason = "Failed to start VPN: ${e.javaClass.simpleName}: ${e.message}"
                 Log.e(TAG, reason, e)
@@ -892,6 +1059,7 @@ class SingBoxService : VpnService() {
                 }
             } finally {
                 isStarting = false
+                startVpnJob = null
             }
         }
     }
@@ -905,8 +1073,29 @@ class SingBoxService : VpnService() {
             isStopping = true
         }
 
+        startVpnJob?.cancel()
+        startVpnJob = null
+
+        vpnHealthJob?.cancel()
+        vpnHealthJob = null
+        nativeUrlTestWarmupJob?.cancel()
+        nativeUrlTestWarmupJob = null
+
+        // Reset cached network state to avoid stale underlying network binding across restarts
+        networkCallbackReady = false
+        lastKnownNetwork = null
+        noPhysicalNetworkWarningLogged = false
+        defaultInterfaceName = ""
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
+            runCatching { setUnderlyingNetworks(null) }
+        }
+
+        Log.i(TAG, "stopVpn(stopService=$stopService) isManuallyStopped=$isManuallyStopped")
+
         autoReconnectJob?.cancel()
         autoReconnectJob = null
+        postTunRebindJob?.cancel()
+        postTunRebindJob = null
 
         isRunning = false
 
@@ -941,6 +1130,7 @@ class SingBoxService : VpnService() {
                     stopSelf()
                 }
                 Log.i(TAG, "VPN stopped")
+                VpnTileService.persistVpnState(applicationContext, false)
                 updateTileState()
             }
 
@@ -1050,6 +1240,7 @@ class SingBoxService : VpnService() {
     }
     
     override fun onDestroy() {
+        Log.i(TAG, "onDestroy called -> stopVpn(stopService=false)")
         stopVpn(stopService = false)
         serviceSupervisorJob.cancel()
         // cleanupSupervisorJob.cancel() // Allow cleanup to finish naturally
@@ -1057,6 +1248,7 @@ class SingBoxService : VpnService() {
     }
      
     override fun onRevoke() {
+        Log.i(TAG, "onRevoke called -> stopVpn(stopService=true)")
         stopVpn(stopService = true)
         super.onRevoke()
     }
@@ -1088,5 +1280,89 @@ class SingBoxService : VpnService() {
             }
         }
         return false
+    }
+    
+    /**
+     * 确保网络回调就绪，最多等待指定超时时间
+     * 如果超时仍未就绪，尝试主动采样当前活跃网络
+     */
+    private suspend fun ensureNetworkCallbackReadyWithTimeout(timeoutMs: Long = 2000L) {
+        if (networkCallbackReady && lastKnownNetwork != null) {
+            Log.v(TAG, "Network callback already ready, lastKnownNetwork=$lastKnownNetwork")
+            return
+        }
+        
+        // 先尝试主动采样
+        val cm = connectivityManager ?: getSystemService(ConnectivityManager::class.java)
+        connectivityManager = cm
+        
+        val activeNet = cm?.activeNetwork
+        if (activeNet != null) {
+            val caps = cm.getNetworkCapabilities(activeNet)
+            val isVpn = caps?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+            val hasInternet = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+            val notVpn = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN) == true
+            
+            if (!isVpn && hasInternet && notVpn) {
+                lastKnownNetwork = activeNet
+                networkCallbackReady = true
+                Log.i(TAG, "Pre-sampled physical network: $activeNet")
+                return
+            }
+        }
+        
+        // 如果主动采样失败，等待回调就绪（带超时）
+        val startTime = System.currentTimeMillis()
+        while (!networkCallbackReady && System.currentTimeMillis() - startTime < timeoutMs) {
+            delay(100)
+        }
+        
+        if (networkCallbackReady) {
+            Log.i(TAG, "Network callback ready after waiting, lastKnownNetwork=$lastKnownNetwork")
+        } else {
+            // 超时后再次尝试查找最佳物理网络
+            val bestNetwork = findBestPhysicalNetwork()
+            if (bestNetwork != null) {
+                lastKnownNetwork = bestNetwork
+                networkCallbackReady = true
+                Log.i(TAG, "Found physical network after timeout: $bestNetwork")
+            } else {
+                Log.w(TAG, "Network callback not ready after ${timeoutMs}ms timeout, proceeding without guaranteed physical network")
+                com.kunk.singbox.repository.LogRepository.getInstance()
+                    .addLog("WARN startVpn: No physical network found after ${timeoutMs}ms - VPN may not work correctly")
+            }
+        }
+    }
+    
+    /**
+     * 如果 openTun 时未找到物理网络，短时间内快速重试绑定，避免等待 5s 健康检查
+     */
+    private fun schedulePostTunRebind(reason: String) {
+        if (postTunRebindJob?.isActive == true) return
+        
+        postTunRebindJob = serviceScope.launch {
+            val delays = listOf(300L, 800L, 1500L)
+            for (d in delays) {
+                delay(d)
+                if (isStopping) return@launch
+                
+                val bestNetwork = findBestPhysicalNetwork()
+                if (bestNetwork != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
+                    try {
+                        setUnderlyingNetworks(arrayOf(bestNetwork))
+                        lastKnownNetwork = bestNetwork
+                        noPhysicalNetworkWarningLogged = false
+                        Log.i(TAG, "Post-TUN rebind success ($reason): $bestNetwork")
+                        com.kunk.singbox.repository.LogRepository.getInstance()
+                            .addLog("INFO postTunRebind: $bestNetwork (reason=$reason)")
+                        boxService?.resetNetwork()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Post-TUN rebind failed ($reason): ${e.message}")
+                    }
+                    return@launch
+                }
+            }
+            Log.w(TAG, "Post-TUN rebind failed after retries ($reason)")
+        }
     }
 }

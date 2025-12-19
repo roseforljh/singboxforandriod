@@ -79,6 +79,10 @@ class NodesViewModel(application: Application) : AndroidViewModel(application) {
     private val _switchResult = MutableStateFlow<String?>(null)
     val switchResult: StateFlow<String?> = _switchResult.asStateFlow()
 
+    // 单节点测速反馈信息（仅在失败/超时时提示）
+    private val _latencyMessage = MutableStateFlow<String?>(null)
+    val latencyMessage: StateFlow<String?> = _latencyMessage.asStateFlow()
+
     fun setActiveNode(nodeId: String) {
         viewModelScope.launch {
             val node = nodes.value.find { it.id == nodeId }
@@ -102,11 +106,19 @@ class NodesViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _testingNodeIds.value = _testingNodeIds.value + nodeId
             try {
-                configRepository.testNodeLatency(nodeId)
+                val node = nodes.value.find { it.id == nodeId }
+                val latency = configRepository.testNodeLatency(nodeId)
+                if (latency <= 0) {
+                    _latencyMessage.value = "${node?.displayName ?: "该节点"} 测速失败/超时"
+                }
             } finally {
                 _testingNodeIds.value = _testingNodeIds.value - nodeId
             }
         }
+    }
+
+    fun clearLatencyMessage() {
+        _latencyMessage.value = null
     }
 
     fun testAllLatency() {

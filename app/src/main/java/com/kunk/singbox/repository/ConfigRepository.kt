@@ -1882,7 +1882,8 @@ class ConfigRepository(private val context: Context) {
             timestamp = true
         )
 
-        val singboxTempDir = File(context.cacheDir, "singbox_temp").also { it.mkdirs() }
+        // 使用 filesDir 而非 cacheDir，确保 FakeIP 缓存不会被系统清理
+        val singboxDataDir = File(context.filesDir, "singbox_data").also { it.mkdirs() }
 
         val clashApiSecret = SecurityUtils.getClashApiSecret()
 
@@ -1892,8 +1893,8 @@ class ConfigRepository(private val context: Context) {
                 secret = clashApiSecret
             ),
             cacheFile = CacheFileConfig(
-                enabled = false,
-                path = File(singboxTempDir, "cache_run.db").absolutePath,
+                enabled = true,
+                path = File(singboxDataDir, "cache.db").absolutePath,
                 storeFakeip = settings.fakeDnsEnabled
             )
         )

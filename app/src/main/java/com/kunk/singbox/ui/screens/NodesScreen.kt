@@ -27,6 +27,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Close
@@ -44,6 +45,8 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -52,16 +55,24 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import android.app.Activity
+import android.content.Intent
+import android.net.VpnService
+import android.os.Build
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.AnnotatedString
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavController
+import com.kunk.singbox.repository.ConfigRepository
+import com.kunk.singbox.repository.SettingsRepository
+import com.kunk.singbox.service.SingBoxService
 import com.kunk.singbox.viewmodel.NodesViewModel
 import com.kunk.singbox.ui.components.InputDialog
 import com.kunk.singbox.ui.components.SingleSelectDialog
@@ -86,8 +97,47 @@ fun NodesScreen(
     val groups by viewModel.nodeGroups.collectAsState()
     val testingNodeIds by viewModel.testingNodeIds.collectAsState()
     val switchResult by viewModel.switchResult.collectAsState()
+    val latencyMessage by viewModel.latencyMessage.collectAsState()
+
+    val isVpnRunning by SingBoxService.isRunningFlow.collectAsState()
+    val isVpnStarting by SingBoxService.isStartingFlow.collectAsState()
     
     val snackbarHostState = remember { SnackbarHostState() }
+
+    var pendingStartAfterPermission by remember { mutableStateOf(false) }
+
+    val vpnPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val granted = result.resultCode == Activity.RESULT_OK
+        if (granted && pendingStartAfterPermission) {
+            pendingStartAfterPermission = false
+            scope.launch {
+                try {
+                    val settingsRepository = SettingsRepository.getInstance(context)
+                    settingsRepository.checkAndMigrateRuleSets()
+                    val configPath = ConfigRepository.getInstance(context).generateConfigFile()
+                    if (configPath.isNullOrBlank()) {
+                        snackbarHostState.showSnackbar("配置生成失败")
+                        return@launch
+                    }
+                    val intent = Intent(context, SingBoxService::class.java).apply {
+                        action = SingBoxService.ACTION_START
+                        putExtra(SingBoxService.EXTRA_CONFIG_PATH, configPath)
+                    }
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        context.startForegroundService(intent)
+                    } else {
+                        context.startService(intent)
+                    }
+                } catch (e: Exception) {
+                    snackbarHostState.showSnackbar("启动失败: ${e.message}")
+                }
+            }
+        } else {
+            pendingStartAfterPermission = false
+        }
+    }
     
     var selectedGroupIndex by remember { mutableStateOf(0) }
     val isTesting by viewModel.isTesting.collectAsState()
@@ -97,6 +147,13 @@ fun NodesScreen(
         switchResult?.let { message ->
             snackbarHostState.showSnackbar(message)
             viewModel.clearSwitchResult()
+        }
+    }
+    // 显示单节点测速失败/超时提示
+    LaunchedEffect(latencyMessage) {
+        latencyMessage?.let { message ->
+            snackbarHostState.showSnackbar(message)
+            viewModel.clearLatencyMessage()
         }
     }
     
@@ -290,9 +347,57 @@ fun NodesScreen(
                     fontWeight = FontWeight.Bold,
                     color = TextPrimary
                 )
-                
-                IconButton(onClick = { showSortDialog = true }) {
-                    Icon(Icons.Rounded.Sort, contentDescription = "排序", tint = PureWhite)
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(
+                        onClick = {
+                            if (isVpnRunning || isVpnStarting) {
+                                val intent = Intent(context, SingBoxService::class.java).apply {
+                                    action = SingBoxService.ACTION_STOP
+                                }
+                                context.startService(intent)
+                            } else {
+                                val prepareIntent = VpnService.prepare(context)
+                                if (prepareIntent != null) {
+                                    pendingStartAfterPermission = true
+                                    vpnPermissionLauncher.launch(prepareIntent)
+                                } else {
+                                    scope.launch {
+                                        try {
+                                            val settingsRepository = SettingsRepository.getInstance(context)
+                                            settingsRepository.checkAndMigrateRuleSets()
+                                            val configPath = ConfigRepository.getInstance(context).generateConfigFile()
+                                            if (configPath.isNullOrBlank()) {
+                                                snackbarHostState.showSnackbar("配置生成失败")
+                                                return@launch
+                                            }
+                                            val intent = Intent(context, SingBoxService::class.java).apply {
+                                                action = SingBoxService.ACTION_START
+                                                putExtra(SingBoxService.EXTRA_CONFIG_PATH, configPath)
+                                            }
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                                context.startForegroundService(intent)
+                                            } else {
+                                                context.startService(intent)
+                                            }
+                                        } catch (e: Exception) {
+                                            snackbarHostState.showSnackbar("启动失败: ${e.message}")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    ) {
+                        val running = isVpnRunning || isVpnStarting
+                        Icon(
+                            imageVector = if (running) Icons.Rounded.Close else Icons.Rounded.Bolt,
+                            contentDescription = if (running) "断开" else "连接",
+                            tint = PureWhite
+                        )
+                    }
+                    IconButton(onClick = { showSortDialog = true }) {
+                        Icon(Icons.Rounded.Sort, contentDescription = "排序", tint = PureWhite)
+                    }
                 }
             }
 

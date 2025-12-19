@@ -27,7 +27,7 @@ class ClashConfigParserTest {
         assertNotNull(config?.outbounds)
         
         val outbounds = config!!.outbounds!!
-        assertEquals(4, outbounds.size) // ss1 + PROXY + direct + block + dns-out (Wait, parser adds 3 defaults)
+        assertEquals(5, outbounds.size) // ss1 + PROXY + direct + block + dns-out
         
         val ss1 = outbounds.find { it.tag == "ss1" }
         assertNotNull(ss1)

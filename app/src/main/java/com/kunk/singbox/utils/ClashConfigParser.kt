@@ -243,6 +243,14 @@ object ClashConfigParser {
                 zeroRttHandshake = map["reduce-rtt"] as? Boolean ?: false,
                 tls = tlsConfig
             )
+            "ss", "shadowsocks" -> Outbound(
+                type = "shadowsocks",
+                tag = name,
+                server = server,
+                serverPort = port,
+                method = map["cipher"] as? String,
+                password = password
+            )
             else -> null
         }
     }

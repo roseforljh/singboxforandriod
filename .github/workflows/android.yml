@@ -17,6 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          lfs: true
           fetch-depth: 0 # Required for git rev-list
 
       - name: set up JDK 17
@@ -42,16 +43,28 @@ jobs:
           COMMIT_COUNT=$(git rev-list --count HEAD)
           if [[ $GITHUB_REF == refs/tags/* ]]; then
             VERSION_NAME=${GITHUB_REF#refs/tags/v}
+            # If tag is v1.0.9, VERSION_NAME becomes 1.0.9
+            # We can also try to derive a versionCode from the tag if it follows a pattern
+            # For example, 1.0.9 -> 10009
+            if [[ $VERSION_NAME =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+              MAJOR=${BASH_REMATCH[1]}
+              MINOR=${BASH_REMATCH[2]}
+              PATCH=${BASH_REMATCH[3]}
+              VERSION_CODE=$((MAJOR * 10000 + MINOR * 100 + PATCH))
+            else
+              VERSION_CODE=$COMMIT_COUNT
+            fi
           else
             VERSION_NAME="1.0.$COMMIT_COUNT"
+            VERSION_CODE=$COMMIT_COUNT
           fi
-          echo "COMMIT_COUNT=$COMMIT_COUNT" >> $GITHUB_ENV
+          echo "VERSION_CODE=$VERSION_CODE" >> $GITHUB_ENV
           echo "VERSION_NAME=$VERSION_NAME" >> $GITHUB_ENV
-          echo "count=$COMMIT_COUNT" >> $GITHUB_OUTPUT
+          echo "count=$VERSION_CODE" >> $GITHUB_OUTPUT
           echo "name=$VERSION_NAME" >> $GITHUB_OUTPUT
 
       - name: Build with Gradle
-        run: gradle assembleRelease -PversionCode=${{ env.COMMIT_COUNT }} -PversionName=${{ env.VERSION_NAME }}
+        run: gradle assembleRelease -PversionCode=${{ env.VERSION_CODE }} -PversionName=${{ env.VERSION_NAME }}
         env:
           KEYSTORE_PATH: ${{ github.workspace }}/release.keystore
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}

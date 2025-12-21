@@ -163,13 +163,26 @@ class ConfigRepository(private val context: Context) {
             )
             val json = gson.toJson(data)
             
-            // Atomic write
+            // Robust atomic write implementation
             val tmpFile = File(profilesFile.parent, "${profilesFile.name}.tmp")
-            tmpFile.writeText(json)
-            if (profilesFile.exists()) {
-                profilesFile.delete()
+            try {
+                tmpFile.writeText(json)
+                if (tmpFile.exists() && tmpFile.length() > 0) {
+                    if (profilesFile.exists()) {
+                        profilesFile.delete()
+                    }
+                    if (!tmpFile.renameTo(profilesFile)) {
+                        Log.e(TAG, "Rename failed, falling back to copy")
+                        tmpFile.copyTo(profilesFile, overwrite = true)
+                        tmpFile.delete()
+                    }
+                    Log.d(TAG, "Profiles saved successfully")
+                } else {
+                    Log.e(TAG, "Tmp file is empty, skipping save to prevent data corruption")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Internal error during save write", e)
             }
-            tmpFile.renameTo(profilesFile)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save profiles", e)
         }
@@ -3523,29 +3536,3 @@ class ConfigRepository(private val context: Context) {
         return "tuic://$uuid:$password@$server:$port${queryPart}#$name"
     }
 }
-data class SavedProfilesData(
-    val profiles: List<ProfileUi>,
-    val activeProfileId: String?
-)
-
-/**
- * VMess 链接配置格式
- */
-data class VMessLinkConfig(
-    val v: String? = null,
-    val ps: String? = null,      // 名称
-    val add: String? = null,     // 服务器地址
-    val port: String? = null,    // 端口
-    val id: String? = null,      // UUID
-    val aid: String? = null,     // alterId
-    val scy: String? = null,     // 加密方式
-    val net: String? = null,     // 传输协议
-    val type: String? = null,    // 伪装类型
-    val host: String? = null,    // 伪装域名
-    val path: String? = null,    // 路径
-    val tls: String? = null,     // TLS
-    val sni: String? = null,     // SNI
-    val alpn: String? = null,
-    val fp: String? = null,      // fingerprint
-    val packetEncoding: String? = null // packet encoding
-)

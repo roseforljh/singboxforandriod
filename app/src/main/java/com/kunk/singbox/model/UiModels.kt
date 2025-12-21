@@ -144,3 +144,32 @@ data class ConnectionStats(
 enum class ConnectionState {
     Idle, Connecting, Connected, Disconnecting, Error
 }
+
+@Keep
+data class SavedProfilesData(
+    @SerializedName("profiles") val profiles: List<ProfileUi>,
+    @SerializedName("activeProfileId") val activeProfileId: String?
+)
+
+/**
+ * VMess 链接配置格式
+ */
+@Keep
+data class VMessLinkConfig(
+    @SerializedName("v") val v: String? = null,
+    @SerializedName("ps") val ps: String? = null,      // 名称
+    @SerializedName("add") val add: String? = null,     // 服务器地址
+    @SerializedName("port") val port: String? = null,    // 端口
+    @SerializedName("id") val id: String? = null,      // UUID
+    @SerializedName("aid") val aid: String? = null,     // alterId
+    @SerializedName("scy") val scy: String? = null,     // 加密方式
+    @SerializedName("net") val net: String? = null,     // 传输协议
+    @SerializedName("type") val type: String? = null,    // 伪装类型
+    @SerializedName("host") val host: String? = null,    // 伪装域名
+    @SerializedName("path") val path: String? = null,    // 路径
+    @SerializedName("tls") val tls: String? = null,     // TLS
+    @SerializedName("sni") val sni: String? = null,     // SNI
+    @SerializedName("alpn") val alpn: String? = null,
+    @SerializedName("fp") val fp: String? = null,      // fingerprint
+    @SerializedName("packetEncoding") val packetEncoding: String? = null // packet encoding
+)

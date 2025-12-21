@@ -222,6 +222,14 @@ class VpnTileService : TileService() {
             bindService(intent, serviceConnection, 0)
         }.getOrDefault(false)
         bindRequested = ok
+
+        if (!ok && pending != "starting" && (shouldBind || pending == "stopping")) {
+            tapPending = false
+            persistVpnState(this, false)
+            persistVpnPending(this, "")
+            lastServiceState = SingBoxService.ServiceState.STOPPED
+            updateTile()
+        }
     }
 
     private val serviceConnection = object : ServiceConnection {

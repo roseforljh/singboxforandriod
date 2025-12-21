@@ -161,7 +161,15 @@ class ConfigRepository(private val context: Context) {
                 profiles = _profiles.value,
                 activeProfileId = _activeProfileId.value
             )
-            profilesFile.writeText(gson.toJson(data))
+            val json = gson.toJson(data)
+            
+            // Atomic write
+            val tmpFile = File(profilesFile.parent, "${profilesFile.name}.tmp")
+            tmpFile.writeText(json)
+            if (profilesFile.exists()) {
+                profilesFile.delete()
+            }
+            tmpFile.renameTo(profilesFile)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save profiles", e)
         }
@@ -188,8 +196,25 @@ class ConfigRepository(private val context: Context) {
             if (profilesFile.exists()) {
                 val json = profilesFile.readText()
                 val savedData = gson.fromJson(json, SavedProfilesData::class.java)
+                
+                // Gson 有时会将泛型列表中的对象反序列化为 LinkedTreeMap，而不是目标对象 (ProfileUi)
+                // 这通常发生在类型擦除或混淆导致类型信息丢失的情况下
+                // 强制转换或重新映射以确保类型正确
+                val safeProfiles = savedData.profiles.map { profile ->
+                    // 强制转换为 Any? 以绕过编译器的类型检查，
+                    // 因为在运行时 profile 可能是 LinkedTreeMap (类型擦除导致)
+                    // 即使声明类型是 ProfileUi
+                    val obj = profile as Any?
+                    if (obj is com.google.gson.internal.LinkedTreeMap<*, *>) {
+                        val jsonStr = gson.toJson(obj)
+                        gson.fromJson(jsonStr, ProfileUi::class.java)
+                    } else {
+                        profile
+                    }
+                }
+
                 // 加载时重置所有配置的更新状态为 Idle，防止因异常退出导致一直显示更新中
-                _profiles.value = savedData.profiles.map {
+                _profiles.value = safeProfiles.map {
                     it.copy(updateStatus = UpdateStatus.Idle)
                 }
                 _activeProfileId.value = savedData.activeProfileId
@@ -482,6 +507,120 @@ class ConfigRepository(private val context: Context) {
                         password = password
                     )
                 }
+                "trojan" -> {
+                    val password = asString(proxyMap["password"]) ?: return null
+                    val sni = asString(proxyMap["sni"]) ?: server
+                    val insecure = asBool(proxyMap["skip-cert-verify"]) == true
+                    val alpn = asStringList(proxyMap["alpn"])
+                    
+                    val network = asString(proxyMap["network"])
+                    val transport = if (network == "ws") {
+                        val wsOpts = proxyMap["ws-opts"] as? Map<*, *>
+                        val path = asString(wsOpts?.get("path")) ?: "/"
+                        val headersRaw = wsOpts?.get("headers") as? Map<*, *>
+                        val headers = mutableMapOf<String, String>()
+                        headersRaw?.forEach { (k, v) ->
+                            val ks = asString(k) ?: return@forEach
+                            val vs = asString(v) ?: return@forEach
+                            headers[ks] = vs
+                        }
+                        if (!headers.containsKey("Host") && !sni.isNullOrBlank()) {
+                            headers["Host"] = sni
+                        }
+                        TransportConfig(
+                            type = "ws",
+                            path = path,
+                            headers = headers
+                        )
+                    } else if (network == "grpc") {
+                         val grpcOpts = proxyMap["grpc-opts"] as? Map<*, *>
+                         val serviceName = asString(grpcOpts?.get("grpc-service-name"))
+                             ?: asString(grpcOpts?.get("service-name")) ?: ""
+                         TransportConfig(type = "grpc", serviceName = serviceName)
+                    } else null
+
+                    Outbound(
+                        type = "trojan",
+                        tag = name,
+                        server = server,
+                        serverPort = port,
+                        password = password,
+                        tls = TlsConfig(
+                            enabled = true,
+                            serverName = sni,
+                            insecure = insecure,
+                            alpn = alpn
+                        ),
+                        transport = transport
+                    )
+                }
+                "vmess" -> {
+                    val uuid = asString(proxyMap["uuid"]) ?: return null
+                    val alterId = asInt(proxyMap["alterId"]) ?: 0
+                    val cipher = asString(proxyMap["cipher"]) ?: "auto"
+                    val network = asString(proxyMap["network"])
+                    val tlsEnabled = asBool(proxyMap["tls"]) == true
+                    val sni = asString(proxyMap["servername"]) ?: asString(proxyMap["sni"]) ?: server
+                    val insecure = asBool(proxyMap["skip-cert-verify"]) == true
+                    val alpn = asStringList(proxyMap["alpn"])
+                    val finalAlpn = if (tlsEnabled && network == "ws" && (alpn == null || alpn.isEmpty())) listOf("http/1.1") else alpn
+                    
+                    val tlsConfig = if (tlsEnabled) {
+                        TlsConfig(
+                            enabled = true,
+                            serverName = sni,
+                            insecure = insecure,
+                            alpn = finalAlpn
+                        )
+                    } else null
+
+                    val transport = when (network) {
+                        "ws" -> {
+                            val wsOpts = proxyMap["ws-opts"] as? Map<*, *>
+                            val path = asString(wsOpts?.get("path")) ?: "/"
+                            val headersRaw = wsOpts?.get("headers") as? Map<*, *>
+                            val headers = mutableMapOf<String, String>()
+                            headersRaw?.forEach { (k, v) ->
+                                val ks = asString(k) ?: return@forEach
+                                val vs = asString(v) ?: return@forEach
+                                headers[ks] = vs
+                            }
+                            if (!headers.containsKey("Host") && !sni.isNullOrBlank()) {
+                                headers["Host"] = sni
+                            }
+                            TransportConfig(
+                                type = "ws",
+                                path = path,
+                                headers = headers
+                            )
+                        }
+                        "grpc" -> {
+                            val grpcOpts = proxyMap["grpc-opts"] as? Map<*, *>
+                            val serviceName = asString(grpcOpts?.get("grpc-service-name"))
+                                ?: asString(grpcOpts?.get("service-name")) ?: ""
+                            TransportConfig(type = "grpc", serviceName = serviceName)
+                        }
+                        "h2", "http" -> {
+                             val h2Opts = proxyMap["h2-opts"] as? Map<*, *>
+                             val path = asString(h2Opts?.get("path"))
+                             val host = asStringList(h2Opts?.get("host"))
+                             TransportConfig(type = "http", path = path, host = host)
+                        }
+                        else -> null
+                    }
+
+                    Outbound(
+                        type = "vmess",
+                        tag = name,
+                        server = server,
+                        serverPort = port,
+                        uuid = uuid,
+                        alterId = alterId,
+                        security = cipher,
+                        tls = tlsConfig,
+                        transport = transport
+                    )
+                }
                 else -> null
             }
         }
@@ -515,9 +654,9 @@ class ConfigRepository(private val context: Context) {
                         )
                     }
                     "url-test", "urltest" -> {
-                        val url = asString(gm["url"])
-                        val interval = asString(gm["interval"]) ?: asInt(gm["interval"])?.toString()
-                        val tolerance = asInt(gm["tolerance"])
+                        val url = asString(gm["url"]) ?: "https://www.gstatic.com/generate_204"
+                        val interval = asString(gm["interval"]) ?: asInt(gm["interval"])?.toString() ?: "300s"
+                        val tolerance = asInt(gm["tolerance"]) ?: 50
                         outbounds.add(
                             Outbound(
                                 type = "urltest",
@@ -2008,6 +2147,33 @@ class ConfigRepository(private val context: Context) {
             result = result.copy(flow = cleanedFlow)
         }
 
+        // Fix URLTest - Convert to selector to avoid sing-box core panic during InterfaceUpdated
+        // The urltest implementation in some sing-box versions has race condition issues
+        if (result.type == "urltest" || result.type == "url-test") {
+            var newOutbounds = result.outbounds
+            if (newOutbounds.isNullOrEmpty()) {
+                newOutbounds = listOf("direct")
+            }
+            
+            // Convert urltest to selector to avoid crash
+            result = result.copy(
+                type = "selector",
+                outbounds = newOutbounds,
+                default = newOutbounds.firstOrNull(),
+                interruptExistConnections = false,
+                // Clear urltest-specific fields
+                url = null,
+                interval = null,
+                tolerance = null
+            )
+            Log.d(TAG, "Converted urltest '${result.tag}' to selector with ${newOutbounds.size} nodes")
+        }
+        
+        // Fix Selector empty outbounds
+        if (result.type == "selector" && result.outbounds.isNullOrEmpty()) {
+            result = result.copy(outbounds = listOf("direct"))
+        }
+
         // Fix ALPN for WS
         val tls = result.tls
         if (result.transport?.type == "ws" && tls?.enabled == true && (tls.alpn == null || tls.alpn.isEmpty())) {
@@ -2369,14 +2535,25 @@ class ConfigRepository(private val context: Context) {
         val dnsServers = mutableListOf<DnsServer>()
         val dnsRules = mutableListOf<DnsRule>()
 
-        // 1. 本地 DNS (放在前面或作为 final 可以提高非匹配域名的解析速度)
+        // 0. Bootstrap DNS (必须是 IP，用于解析其他 DoH/DoT 域名)
+        dnsServers.add(
+            DnsServer(
+                tag = "dns-bootstrap",
+                address = "223.5.5.5", // AliDNS IP
+                detour = "direct",
+                strategy = "ipv4_only"
+            )
+        )
+
+        // 1. 本地 DNS
         val localDnsAddr = settings.localDns.takeIf { it.isNotBlank() } ?: "https://dns.alidns.com/dns-query"
         dnsServers.add(
             DnsServer(
                 tag = "local",
                 address = localDnsAddr,
                 detour = "direct",
-                strategy = mapDnsStrategy(settings.directDnsStrategy)
+                strategy = mapDnsStrategy(settings.directDnsStrategy),
+                addressResolver = "dns-bootstrap" // 必须指定解析器
             )
         )
 
@@ -2386,7 +2563,8 @@ class ConfigRepository(private val context: Context) {
                 tag = "remote",
                 address = settings.remoteDns,
                 detour = "PROXY",
-                strategy = mapDnsStrategy(settings.remoteDnsStrategy)
+                strategy = mapDnsStrategy(settings.remoteDnsStrategy),
+                addressResolver = "dns-bootstrap" // 必须指定解析器
             )
         )
 
@@ -2451,15 +2629,38 @@ class ConfigRepository(private val context: Context) {
 
         // Fake DNS
         // 注意：必须放在 direct/proxy 的 DNS 规则之后，否则会抢占所有 A/AAAA 查询，导致 local/remote 分流规则失效。
-        if (settings.fakeDnsEnabled) {
-            dnsServers.add(
-                DnsServer(
-                    tag = "fakeip",
-                    type = "fakeip",
-                    inet4Range = settings.fakeIpRange
-                )
+        // 对于旧版 sing-box (v1.8.0以前或某些定制版)，fakeip 可能配置在 DNS 全局选项中，
+        // 而不是作为单独的 server 类型。
+        // 我们尝试同时兼容：
+        // 1. 在 DnsConfig.fakeip 中设置配置（旧版）
+        // 2. 如果内核支持，它会读取 global fakeip 配置。
+        // 3. 路由规则中 server="fakeip" 可能不再适用，如果内核不识别 server tag "fakeip"。
+        //    但旧版中通常 global fakeip 开启后，如果规则没有匹配到具体 server，且 fakeip enabled，
+        //    它可能会自动处理？或者我们需要一个特殊的 server tag？
+        
+        // 实际上，如果旧版 fakeip 是全局选项，那么通常需要配合 dns rule server="fakeip" 来使用吗？
+        // 在 v1.7 中：
+        // "dns": {
+        //   "fakeip": { "enabled": true, "inet4_range": "..." }
+        // }
+        // 并且规则可以使用 "server": "fakeip" (这是保留字吗？)
+        // 或者根本不需要 server="fakeip" 规则，而是只要查询没有命中其他规则，且是 A/AAAA，
+        // 并且 fakeip 开启，它就会返回 fakeip？
+        
+        // 为了稳妥，我们配置全局 fakeip，并保留一条兜底规则指向 "fakeip" (如果内核支持)。
+        // 如果内核不支持 server="fakeip"，这条规则可能会报错吗？
+        // 如果我们不加 server，只加 global fakeip config，sing-box 如何知道哪些域名走 fakeip？
+        // 通常是 `query_type` 为 A/AAAA 且未命中其他规则。
+        
+        val fakeIpConfig = if (settings.fakeDnsEnabled) {
+            DnsFakeIpConfig(
+                enabled = true,
+                inet4Range = settings.fakeIpRange
             )
-            // 规则：未命中上面规则的 A/AAAA 查询走 fakeip
+        } else null
+
+        if (settings.fakeDnsEnabled) {
+            // 尝试添加规则指向保留字 "fakeip"
             dnsRules.add(
                 DnsRule(
                     queryType = listOf("A", "AAAA"),
@@ -2474,7 +2675,8 @@ class ConfigRepository(private val context: Context) {
             finalServer = "local", // 兜底使用本地 DNS，保证基础联网不卡死
             strategy = mapDnsStrategy(settings.dnsStrategy),
             disableCache = !settings.dnsCacheEnabled,
-            independentCache = true
+            independentCache = true,
+            fakeip = fakeIpConfig
         )
         
         val rawOutbounds = baseConfig.outbounds
@@ -2634,8 +2836,10 @@ class ConfigRepository(private val context: Context) {
                     if (existing.type == "selector" || existing.type == "urltest") {
                         // Merge tags: existing + new (deduplicated)
                         val combinedTags = ((existing.outbounds ?: emptyList()) + nodeTags).distinct()
-                        fixedOutbounds[existingIndex] = existing.copy(outbounds = combinedTags)
-                        Log.d(TAG, "Updated group '$groupName' with ${combinedTags.size} nodes")
+                        // 确保列表不为空
+                        val safeTags = if (combinedTags.isEmpty()) listOf("direct") else combinedTags
+                        fixedOutbounds[existingIndex] = existing.copy(outbounds = safeTags)
+                        Log.d(TAG, "Updated group '$groupName' with ${safeTags.size} nodes")
                     } else {
                         Log.w(TAG, "Tag collision: '$groupName' is needed as group but exists as ${existing.type}")
                     }
@@ -2683,6 +2887,11 @@ class ConfigRepository(private val context: Context) {
 
         // 创建一个主 Selector
         val selectorTag = "PROXY"
+
+        // 确保代理列表不为空，否则 Selector/URLTest 会崩溃
+        if (proxyTags.isEmpty()) {
+            proxyTags.add("direct")
+        }
 
         val selectorDefault = activeNode
             ?.let { nodeTagMap[it.id] ?: it.name }
@@ -2802,6 +3011,22 @@ class ConfigRepository(private val context: Context) {
             finalOutbound = selectorTag, // 路由指向 Selector
             autoDetectInterface = true
         )
+
+        // Final safety check: Filter out non-existent references in Selector/URLTest
+        val allOutboundTags = fixedOutbounds.map { it.tag }.toSet()
+        val safeOutbounds = fixedOutbounds.map { outbound ->
+            if (outbound.type == "selector" || outbound.type == "urltest" || outbound.type == "url-test") {
+                val validRefs = outbound.outbounds?.filter { allOutboundTags.contains(it) } ?: emptyList()
+                val safeRefs = if (validRefs.isEmpty()) listOf("direct") else validRefs
+                
+                if (safeRefs.size != (outbound.outbounds?.size ?: 0)) {
+                    Log.w(TAG, "Filtered invalid refs in ${outbound.tag}: ${outbound.outbounds} -> $safeRefs")
+                }
+                outbound.copy(outbounds = safeRefs)
+            } else {
+                outbound
+            }
+        }
         
         return baseConfig.copy(
             log = log,
@@ -2809,7 +3034,7 @@ class ConfigRepository(private val context: Context) {
             inbounds = inbounds,
             dns = dns,
             route = route,
-            outbounds = fixedOutbounds
+            outbounds = safeOutbounds
         )
     }
     

@@ -224,7 +224,8 @@ android {
 
     ndkVersion = (project.findProperty("ndkVersion") as String?) ?: "29.0.14206865"
 
-    val preferSmallInstall = (project.findProperty("preferSmallInstall") as String?)?.toBoolean() ?: true
+    // NekoBox 风格：优先压缩 APK 体积 (useLegacyPackaging = true)
+    val preferCompressedApk = (project.findProperty("preferCompressedApk") as String?)?.toBoolean() ?: true
 
     defaultConfig {
         applicationId = "com.kunk.singbox"
@@ -326,7 +327,7 @@ android {
         // useLegacyPackaging = true 会压缩 APK 中的 .so，使下载体积最小（类似 NekoBox）
         // 但安装后会解压到 lib 目录，增加安装后占用。
         jniLibs {
-            useLegacyPackaging = !preferSmallInstall
+            useLegacyPackaging = preferCompressedApk
         }
     }
     

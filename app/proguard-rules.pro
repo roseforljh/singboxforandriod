@@ -13,7 +13,11 @@
 -dontwarn io.nekohasekai.libbox.**
 
 # App specific rules for JNI callbacks
--keep class com.kunk.singbox.** { *; }
+# Optimize App classes - allow shrinking/obfuscation where possible, but keep entry points
+-keep class com.kunk.singbox.MainActivity { *; }
+-keep class com.kunk.singbox.service.** { *; }
+# Keep data models used in JSON/Reflection
+-keep class com.kunk.singbox.model.** { *; }
 
 # Generic rules for missing classes reported in the error
 -dontwarn d0.**

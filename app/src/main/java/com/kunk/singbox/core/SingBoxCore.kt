@@ -152,13 +152,22 @@ class SingBoxCore private constructor(private val context: Context) {
 
     /**
      * 使用 Libbox 原生方法进行延迟测试
-     * 当前内核仅暴露 BoxService.start/close，因此统一走本地 HTTP 代理测速
+     * 优先尝试调用 NekoBox 内核的 urlTest 方法，失败则回退到本地 HTTP 代理测速
      */
     private suspend fun testOutboundLatencyWithLibbox(outbound: Outbound, settings: com.kunk.singbox.model.AppSettings? = null): Long = withContext(Dispatchers.IO) {
         if (!libboxAvailable) return@withContext -1L
+        
+        val finalSettings = settings ?: SettingsRepository.getInstance(context).settings.first()
+        val url = adjustUrlForMode(finalSettings.latencyTestUrl, finalSettings.latencyTestMethod)
+        
+        // 尝试使用 NekoBox 原生 urlTest
+        val nativeRtt = testWithLibboxStaticUrlTest(outbound, url, 5000, finalSettings.latencyTestMethod)
+        if (nativeRtt >= 0) {
+            return@withContext nativeRtt
+        }
+
+        // 回退方案：本地 HTTP 代理测速
         return@withContext try {
-            val finalSettings = settings ?: SettingsRepository.getInstance(context).settings.first()
-            val url = adjustUrlForMode(finalSettings.latencyTestUrl, finalSettings.latencyTestMethod)
             val fallbackUrl = try {
                 if (finalSettings.latencyTestMethod == com.kunk.singbox.model.LatencyTestMethod.TCP) {
                     adjustUrlForMode("http://cp.cloudflare.com/generate_204", finalSettings.latencyTestMethod)
@@ -300,8 +309,24 @@ class SingBoxCore private constructor(private val context: Context) {
             log = com.kunk.singbox.model.LogConfig(level = "warn", timestamp = true),
             dns = com.kunk.singbox.model.DnsConfig(
                 servers = listOf(
-                    com.kunk.singbox.model.DnsServer(tag = "local", address = settings.localDns, detour = "direct"),
-                    com.kunk.singbox.model.DnsServer(tag = "remote", address = settings.remoteDns, detour = "direct")
+                    com.kunk.singbox.model.DnsServer(
+                        tag = "dns-bootstrap",
+                        address = "223.5.5.5",
+                        detour = "direct",
+                        strategy = "ipv4_only"
+                    ),
+                    com.kunk.singbox.model.DnsServer(
+                        tag = "local",
+                        address = settings.localDns.ifBlank { "https://dns.alidns.com/dns-query" },
+                        detour = "direct",
+                        addressResolver = "dns-bootstrap"
+                    ),
+                    com.kunk.singbox.model.DnsServer(
+                        tag = "remote",
+                        address = settings.remoteDns.ifBlank { "https://dns.google/dns-query" },
+                        detour = "direct",
+                        addressResolver = "dns-bootstrap"
+                    )
                 )
             ),
             inbounds = listOf(inbound),
@@ -379,16 +404,33 @@ class SingBoxCore private constructor(private val context: Context) {
             ensureLibboxSetup(context)
             val selectorJson = "{\"tag\":\"" + outbound.tag + "\"}"
 
-            // Reuse the discovery cache (populated by testOutboundLatencyWithLibbox) if already available.
-            // If not, trigger discovery once by calling the same function with current settings.
+            // 动态查找 NekoBox 原生 urlTest 方法
             if (discoveredUrlTestMethod == null) {
-                val settings = SettingsRepository.getInstance(context).settings.first()
-                testOutboundLatencyWithLibbox(outbound, settings)
+                val libboxClass = Class.forName("io.nekohasekai.libbox.Libbox")
+                // 查找签名匹配的方法：urlTest(String groupTag, String url, long timeout, PlatformInterface pi)
+                // 注意：NekoBox 的实现可能参数略有不同，需要灵活匹配
+                for (method in libboxClass.methods) {
+                    if (method.name.equals("urlTest", ignoreCase = true) ||
+                        method.name.equals("urlTestOnRunning", ignoreCase = true)) {
+                        
+                        // 简单的参数签名检查，根据实际 libbox 调整
+                        // 通常是 (String groupTag, String url, long/int timeout, ...)
+                        val paramTypes = method.parameterTypes
+                        if (paramTypes.size >= 2 &&
+                            paramTypes[0] == String::class.java &&
+                            paramTypes[1] == String::class.java) {
+                            
+                            discoveredUrlTestMethod = method
+                            Log.i(TAG, "Found native URLTest method: ${method.name}")
+                            break
+                        }
+                    }
+                }
             }
 
             val m = discoveredUrlTestMethod
             if (m == null) {
-                Log.w(TAG, "Offline URLTest RTT unavailable: no Libbox static urlTest method")
+                // Log.d(TAG, "Native URLTest method not found, will use fallback.")
                 return@withContext -1L
             }
 
@@ -421,7 +463,13 @@ class SingBoxCore private constructor(private val context: Context) {
         timeoutMs: Int,
         method: LatencyTestMethod
     ): Long = withContext(Dispatchers.IO) {
-        // 当前内核不支持 urlTest/urlTestOnRunning，直接走 HTTP 代理测速
+        // 尝试调用 native 方法 (如果 VPN 正在运行)
+        if (SingBoxService.isRunning && libboxAvailable) {
+             val rtt = testWithLibboxStaticUrlTest(outbound, targetUrl, timeoutMs, method)
+             if (rtt >= 0) return@withContext rtt
+        }
+        
+        // 内核不支持或未运行，直接走 HTTP 代理测速
         testWithLocalHttpProxy(outbound, targetUrl, fallbackUrl, timeoutMs)
     }
 
@@ -596,6 +644,10 @@ class SingBoxCore private constructor(private val context: Context) {
             return -1
         }
 
+        override fun usePlatformInterfaceGetter(): Boolean = true
+
+        override fun usePlatformDefaultInterfaceMonitor(): Boolean = true
+
         override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) {
             currentInterfaceListener = listener
             networkCallback = object : ConnectivityManager.NetworkCallback() {
@@ -606,7 +658,7 @@ class SingBoxCore private constructor(private val context: Context) {
                     updateDefaultInterface(network)
                 }
                 override fun onLost(network: Network) {
-                    currentInterfaceListener?.updateDefaultInterface("", 0, false, false)
+                    currentInterfaceListener?.updateDefaultInterface("", 0)
                 }
             }
             val request = NetworkRequest.Builder()
@@ -640,9 +692,7 @@ class SingBoxCore private constructor(private val context: Context) {
                         NetworkInterface.getByName(interfaceName)?.index ?: 0
                     } catch (e: Exception) { 0 }
                     val caps = connectivityManager.getNetworkCapabilities(network)
-                    val isExpensive = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED) != true
-                    val isConstrained = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_CONGESTED) != true
-                    currentInterfaceListener?.updateDefaultInterface(interfaceName, index, isExpensive, isConstrained)
+                    currentInterfaceListener?.updateDefaultInterface(interfaceName, index)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to update default interface", e)
@@ -661,12 +711,7 @@ class SingBoxCore private constructor(private val context: Context) {
                             name = iface.name
                             index = iface.index
                             mtu = iface.mtu
-                            type = when {
-                                iface.name.startsWith("wlan") -> 0
-                                iface.name.startsWith("rmnet") || iface.name.startsWith("ccmni") -> 1
-                                iface.name.startsWith("eth") -> 2
-                                else -> 3
-                            }
+                            // type = ... (Field removed/renamed in v1.10)
                             var flagsStr = 0
                             if (iface.isUp) flagsStr = flagsStr or 1
                             if (iface.isLoopback) flagsStr = flagsStr or 4
@@ -696,8 +741,8 @@ class SingBoxCore private constructor(private val context: Context) {
         override fun readWIFIState(): WIFIState? = null
         override fun clearDNSCache() {}
         override fun sendNotification(p0: io.nekohasekai.libbox.Notification?) {}
-        override fun localDNSTransport(): LocalDNSTransport? = null
-        override fun systemCertificates(): StringIterator? = null
+        // override fun localDNSTransport(): LocalDNSTransport? = null
+        // override fun systemCertificates(): StringIterator? = null
         override fun writeLog(message: String?) {
             Log.v("SingBoxCoreTest", "libbox: $message")
             message?.let {

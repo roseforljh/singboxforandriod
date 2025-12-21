@@ -28,7 +28,8 @@ data class DnsConfig(
     @SerializedName("strategy") val strategy: String? = null,
     @SerializedName("disable_cache") val disableCache: Boolean? = null,
     @SerializedName("disable_expire") val disableExpire: Boolean? = null,
-    @SerializedName("independent_cache") val independentCache: Boolean? = null
+    @SerializedName("independent_cache") val independentCache: Boolean? = null,
+    @SerializedName("fakeip") val fakeip: DnsFakeIpConfig? = null
 )
 
 @Keep
@@ -39,7 +40,12 @@ data class DnsServer(
     @SerializedName("address") val address: String? = null,
     @SerializedName("address_resolver") val addressResolver: String? = null,
     @SerializedName("detour") val detour: String? = null,
-    @SerializedName("strategy") val strategy: String? = null,
+    @SerializedName("strategy") val strategy: String? = null
+)
+
+@Keep
+data class DnsFakeIpConfig(
+    @SerializedName("enabled") val enabled: Boolean? = null,
     @SerializedName("inet4_range") val inet4Range: String? = null,
     @SerializedName("inet6_range") val inet6Range: String? = null
 )

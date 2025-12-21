@@ -209,6 +209,8 @@ class SingBoxService : VpnService() {
     @Volatile private var pendingStartConfigPath: String? = null
     @Volatile private var connectionOwnerPermissionDeniedLogged = false
     @Volatile private var startVpnJob: Job? = null
+    @Volatile private var realTimeNodeName: String? = null
+    @Volatile private var nodePollingJob: Job? = null
 
     @Volatile private var lastRuleSetCheckMs: Long = 0L
     private val ruleSetCheckIntervalMs: Long = 6 * 60 * 60 * 1000L
@@ -1180,6 +1182,7 @@ class SingBoxService : VpnService() {
                 return
             }
             isStarting = true
+            realTimeNodeName = null
         }
 
         updateServiceState(ServiceState.STARTING)
@@ -1301,6 +1304,35 @@ class SingBoxService : VpnService() {
                 VpnTileService.persistVpnPending(applicationContext, "")
                 updateServiceState(ServiceState.RUNNING)
                 updateTileState()
+
+                // Start node polling to observe real-time outbound (e.g. for split tunneling/url-test)
+                nodePollingJob?.cancel()
+                nodePollingJob = serviceScope.launch {
+                    val configRepo = ConfigRepository.getInstance(this@SingBoxService)
+                    while (isActive && isRunning) {
+                        try {
+                            val box = boxService
+                            if (box != null) {
+                                // libbox 1.12+ common API for retrieving selected outbound in a group
+                                val group = box.getOutboundGroup("PROXY")
+                                val selected = group?.selected
+                                if (!selected.isNullOrBlank() && selected != realTimeNodeName) {
+                                    realTimeNodeName = selected
+                                    Log.i(TAG, "Observed outbound change: $selected")
+                                    // Sync back to ConfigRepository to update UI in app
+                                    configRepo.syncActiveNodeFromProxySelection(selected)
+                                    updateNotification()
+                                }
+                            }
+                        } catch (e: Exception) {
+                            // If API is not available or fails, we stay with the static name from ConfigRepository
+                            if (Log.isLoggable(TAG, Log.VERBOSE)) {
+                                Log.v(TAG, "Failed to poll real-time node: ${e.message}")
+                            }
+                        }
+                        delay(3000)
+                    }
+                }
 
                 serviceScope.launch postStart@{
                     val delays = listOf(800L, 2000L, 5000L)
@@ -1460,6 +1492,8 @@ class SingBoxService : VpnService() {
 
         vpnHealthJob?.cancel()
         vpnHealthJob = null
+        nodePollingJob?.cancel()
+        nodePollingJob = null
         nativeUrlTestWarmupJob?.cancel()
         nativeUrlTestWarmupJob = null
 
@@ -1479,6 +1513,7 @@ class SingBoxService : VpnService() {
         postTunRebindJob?.cancel()
         postTunRebindJob = null
 
+        realTimeNodeName = null
         isRunning = false
 
         val listener = currentInterfaceListener
@@ -1618,7 +1653,7 @@ class SingBoxService : VpnService() {
         
         val configRepository = ConfigRepository.getInstance(this)
         val activeNodeId = configRepository.activeNodeId.value
-        val activeNodeName = configRepository.nodes.value.find { it.id == activeNodeId }?.name ?: "已连接"
+        val activeNodeName = realTimeNodeName ?: configRepository.nodes.value.find { it.id == activeNodeId }?.name ?: "已连接"
 
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, CHANNEL_ID)

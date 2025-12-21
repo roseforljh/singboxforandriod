@@ -13,12 +13,15 @@ import com.kunk.singbox.R
 import com.kunk.singbox.repository.ConfigRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class VpnTileService : TileService() {
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var bindTimeoutJob: Job? = null
     @Volatile private var lastServiceState: SingBoxService.ServiceState = SingBoxService.ServiceState.STOPPED
     private var boundService: SingBoxService? = null
     private var serviceBound = false
@@ -223,6 +226,31 @@ class VpnTileService : TileService() {
         }.getOrDefault(false)
         bindRequested = ok
 
+        bindTimeoutJob?.cancel()
+        bindTimeoutJob = serviceScope.launch {
+            delay(1200)
+            if (serviceBound || boundService != null) return@launch
+            if (!bindRequested) return@launch
+
+            val active = runCatching {
+                getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .getBoolean(KEY_VPN_ACTIVE, false)
+            }.getOrDefault(false)
+            val p = runCatching {
+                getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .getString(KEY_VPN_PENDING, "")
+            }.getOrNull().orEmpty()
+
+            if (p != "starting" && (active || p == "stopping")) {
+                unbindService()
+                tapPending = false
+                persistVpnState(this@VpnTileService, false)
+                persistVpnPending(this@VpnTileService, "")
+                lastServiceState = SingBoxService.ServiceState.STOPPED
+                updateTile()
+            }
+        }
+
         if (!ok && pending != "starting" && (shouldBind || pending == "stopping")) {
             tapPending = false
             persistVpnState(this, false)
@@ -259,6 +287,8 @@ class VpnTileService : TileService() {
 
     private fun unbindService() {
         if (!bindRequested) return
+        bindTimeoutJob?.cancel()
+        bindTimeoutJob = null
         if (serviceBound) {
             boundService?.unregisterStateCallback(stateCallback)
         }

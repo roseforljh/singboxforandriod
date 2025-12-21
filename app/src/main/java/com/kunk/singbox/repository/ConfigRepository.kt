@@ -2412,6 +2412,36 @@ class ConfigRepository(private val context: Context) {
     /**
      * 构建应用分流路由规则
      */
+    /**
+     * 构建自定义简单路由规则（单域名、域名后缀、IP 等）
+     */
+    private fun buildCustomRules(
+        settings: AppSettings,
+        defaultProxyTag: String
+    ): List<RouteRule> {
+        return settings.customRules.filter { it.enabled }.map { rule ->
+            val outbound = when (rule.outbound) {
+                OutboundTag.DIRECT -> "direct"
+                OutboundTag.PROXY -> defaultProxyTag
+                OutboundTag.BLOCK -> "block"
+            }
+
+            when (rule.type) {
+                RuleType.DOMAIN -> RouteRule(domain = listOf(rule.value), outbound = outbound)
+                RuleType.DOMAIN_SUFFIX -> RouteRule(domainSuffix = listOf(rule.value), outbound = outbound)
+                RuleType.DOMAIN_KEYWORD -> RouteRule(domainKeyword = listOf(rule.value), outbound = outbound)
+                RuleType.IP_CIDR -> RouteRule(ipCidr = listOf(rule.value), outbound = outbound)
+                RuleType.GEOIP -> RouteRule(ipCidr = listOf("geoip:${rule.value}"), outbound = outbound) 
+                RuleType.GEOSITE -> RouteRule(ruleSet = listOf("geosite:${rule.value}"), outbound = outbound)
+                RuleType.PORT -> {
+                    val port = rule.value.toIntOrNull()
+                    if (port != null) RouteRule(port = listOf(port), outbound = outbound) else null
+                }
+                RuleType.PROCESS_NAME -> RouteRule(processName = listOf(rule.value), outbound = outbound)
+            }
+        }.filterNotNull()
+    }
+
     private fun buildAppRoutingRules(
         settings: AppSettings,
         defaultProxyTag: String,
@@ -2505,36 +2535,6 @@ class ConfigRepository(private val context: Context) {
         
         Log.v(TAG, "Generated ${rules.size} app routing rules")
         return rules
-    }
-
-    /**
-     * 构建自定义简单路由规则
-     */
-    private fun buildCustomRules(
-        settings: AppSettings,
-        defaultProxyTag: String,
-        nodeTagResolver: (String?) -> String?
-    ): List<RouteRule> {
-        return settings.customRules.filter { it.enabled }.map { rule ->
-            val outboundTag = when (rule.outbound) {
-                OutboundTag.DIRECT -> "direct"
-                OutboundTag.BLOCK -> "block"
-                OutboundTag.PROXY -> defaultProxyTag
-            }
-
-            val valueList = listOf(rule.value)
-
-            when (rule.type) {
-                RuleType.DOMAIN -> RouteRule(domain = valueList, outbound = outboundTag)
-                RuleType.DOMAIN_SUFFIX -> RouteRule(domainSuffix = valueList, outbound = outboundTag)
-                RuleType.DOMAIN_KEYWORD -> RouteRule(domainKeyword = valueList, outbound = outboundTag)
-                RuleType.IP_CIDR -> RouteRule(ipCidr = valueList, outbound = outboundTag)
-                RuleType.GEOIP -> RouteRule(geoip = valueList, outbound = outboundTag)
-                RuleType.GEOSITE -> RouteRule(geosite = valueList, outbound = outboundTag)
-                RuleType.PORT -> RouteRule(port = valueList.mapNotNull { it.toIntOrNull() }, outbound = outboundTag)
-                RuleType.PROCESS_NAME -> RouteRule(processName = valueList, outbound = outboundTag)
-            }
-        }
     }
     
     /**
@@ -3053,13 +3053,10 @@ class ConfigRepository(private val context: Context) {
             }
         }
 
-        // 1. 构建自定义简单规则
-        val customSimpleRules = buildCustomRules(settings, selectorTag, nodeTagResolver)
-
-        // 2. 构建应用分流规则
+        // 构建应用分流规则
         val appRoutingRules = buildAppRoutingRules(settings, selectorTag, fixedOutbounds, nodeTagResolver)
         
-        // 3. 构建广告拦截规则和规则集
+        // 构建广告拦截规则和规则集
         val adBlockRules = if (settings.blockAds) {
             buildAdBlockRules()
         } else {
@@ -3072,7 +3069,10 @@ class ConfigRepository(private val context: Context) {
             emptyList()
         }
 
-        // 4. 构建自定义规则集配置和路由规则
+        // 构建自定义简单路由规则
+        val customRules = buildCustomRules(settings, selectorTag)
+
+        // 构建自定义规则集配置和路由规则
         val customRuleSets = buildCustomRuleSets(settings)
         val customRuleSetRules = buildCustomRuleSetRules(settings, selectorTag, fixedOutbounds, nodeTagResolver)
         
@@ -3108,10 +3108,23 @@ class ConfigRepository(private val context: Context) {
             emptyList()
         }
 
-        val allRules = listOf(
-            // DNS 流量走 dns-out
-            RouteRule(protocol = listOf("dns"), outbound = "dns-out")
-        ) + quicRule + bypassLanRules + adBlockRules + customSimpleRules + customRuleSetRules + appRoutingRules
+        val dnsTrafficRule = listOf(RouteRule(protocol = listOf("dns"), outbound = "dns-out"))
+
+        val allRules = when (settings.routingMode) {
+            RoutingMode.GLOBAL_PROXY -> dnsTrafficRule
+            RoutingMode.GLOBAL_DIRECT -> dnsTrafficRule + listOf(RouteRule(outbound = "direct"))
+            RoutingMode.RULE -> {
+                // 路由规则优先级顺序：
+                // 1. DNS 流量
+                // 2. 绕过局域网
+                // 3. 屏蔽 QUIC
+                // 4. 广告拦截（最高拦截优先级）
+                // 5. 自定义简单规则（用户显式规则优先级最高）
+                // 6. 自定义规则集规则（如 Telegram 分流、绕过大陆）
+                // 7. 应用分流规则（作为兜底匹配）
+                dnsTrafficRule + bypassLanRules + quicRule + adBlockRules + customRules + customRuleSetRules + appRoutingRules
+            }
+        }
         
         // 记录所有生成的路由规则
         Log.v(TAG, "=== Generated Route Rules (${allRules.size} total) ===")

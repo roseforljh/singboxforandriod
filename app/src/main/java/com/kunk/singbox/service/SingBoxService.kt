@@ -506,17 +506,21 @@ class SingBoxService : VpnService() {
                 "/proc/net/udp6"
             )
 
-            val readable = procPaths.any { path ->
-                try {
+            fun hasUidHeader(path: String): Boolean {
+                return try {
                     val file = File(path)
-                    file.exists() && file.canRead()
+                    if (!file.exists() || !file.canRead()) return false
+                    val header = file.bufferedReader().use { it.readLine() } ?: return false
+                    header.contains("uid")
                 } catch (_: Exception) {
                     false
                 }
             }
 
+            val readable = procPaths.all { path -> hasUidHeader(path) }
+
             if (!readable) {
-                connectionOwnerLastEvent = "procfs_unreadable -> force findConnectionOwner"
+                connectionOwnerLastEvent = "procfs_unreadable_or_no_uid -> force findConnectionOwner"
             }
 
             return readable
@@ -531,6 +535,51 @@ class SingBoxService : VpnService() {
         ): Int {
             connectionOwnerCalls.incrementAndGet()
 
+            fun findUidFromProcFsBySourcePort(protocol: Int, srcPort: Int): Int {
+                if (srcPort <= 0) return 0
+
+                val procFiles = when (protocol) {
+                    OsConstants.IPPROTO_TCP -> listOf("/proc/net/tcp", "/proc/net/tcp6")
+                    OsConstants.IPPROTO_UDP -> listOf("/proc/net/udp", "/proc/net/udp6")
+                    else -> emptyList()
+                }
+                if (procFiles.isEmpty()) return 0
+
+                val targetPortHex = srcPort.toString(16).uppercase().padStart(4, '0')
+
+                fun parseUidFromLine(parts: List<String>): Int {
+                    if (parts.size < 9) return 0
+                    val uidStr = parts.getOrNull(7) ?: return 0
+                    return uidStr.toIntOrNull() ?: 0
+                }
+
+                for (path in procFiles) {
+                    try {
+                        val file = File(path)
+                        if (!file.exists() || !file.canRead()) continue
+                        var resultUid = 0
+                        file.bufferedReader().useLines { lines ->
+                            for (line in lines.drop(1)) {
+                                val parts = line.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+                                val local = parts.getOrNull(1) ?: continue
+                                val portHex = local.substringAfter(':', "").uppercase()
+                                if (portHex == targetPortHex) {
+                                    val uid = parseUidFromLine(parts)
+                                    if (uid > 0) {
+                                        resultUid = uid
+                                        break
+                                    }
+                                }
+                            }
+                        }
+                        if (resultUid > 0) return resultUid
+                    } catch (e: Exception) {
+                        Log.d(TAG, "Failed to read proc file: $path", e)
+                    }
+                }
+                return 0
+            }
+
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
                 connectionOwnerInvalidArgs.incrementAndGet()
                 connectionOwnerLastEvent = "api<29"
@@ -539,7 +588,8 @@ class SingBoxService : VpnService() {
 
             fun parseAddress(value: String?): InetAddress? {
                 if (value.isNullOrBlank()) return null
-                val cleaned = value.substringBefore("%")
+                // Remove brackets for IPv6 [::1] -> ::1 and remove scope ID
+                val cleaned = value.trim().replace("[", "").replace("]", "").substringBefore("%")
                 return try {
                     InetAddress.getByName(cleaned)
                 } catch (_: Exception) {
@@ -549,17 +599,27 @@ class SingBoxService : VpnService() {
 
             val sourceIp = parseAddress(sourceAddress)
             val destinationIp = parseAddress(destinationAddress)
-            if (sourceIp == null || destinationIp == null || sourcePort <= 0 || destinationPort <= 0) {
-                connectionOwnerInvalidArgs.incrementAndGet()
-                connectionOwnerLastEvent =
-                    "invalid_args src=$sourceAddress:$sourcePort dst=$destinationAddress:$destinationPort proto=$ipProtocol"
-                return 0
-            }
 
             val protocol = when (ipProtocol) {
                 OsConstants.IPPROTO_TCP -> OsConstants.IPPROTO_TCP
                 OsConstants.IPPROTO_UDP -> OsConstants.IPPROTO_UDP
                 else -> ipProtocol
+            }
+
+            if (sourceIp == null || sourcePort <= 0 || destinationIp == null || destinationPort <= 0) {
+                val uid = findUidFromProcFsBySourcePort(protocol, sourcePort)
+                if (uid > 0) {
+                    connectionOwnerUidResolved.incrementAndGet()
+                    connectionOwnerLastUid = uid
+                    connectionOwnerLastEvent =
+                        "procfs_fallback uid=$uid proto=$protocol src=$sourceAddress:$sourcePort dst=$destinationAddress:$destinationPort"
+                    return uid
+                }
+
+                connectionOwnerInvalidArgs.incrementAndGet()
+                connectionOwnerLastEvent =
+                    "invalid_args src=$sourceAddress:$sourcePort dst=$destinationAddress:$destinationPort proto=$ipProtocol"
+                return 0
             }
 
             return try {
@@ -1158,19 +1218,23 @@ class SingBoxService : VpnService() {
                 ensureNetworkCallbackReadyWithTimeout()
                 
                 // 1. 确保规则集就绪（预下载）
-                // 即使下载失败也继续启动，使用旧缓存或空文件，避免阻塞启动
+                // 如果本地缓存不存在，允许网络下载；如果下载失败也继续启动
                 try {
+                    val ruleSetRepo = RuleSetRepository.getInstance(this@SingBoxService)
                     val now = System.currentTimeMillis()
-                    val shouldCheck = now - lastRuleSetCheckMs >= ruleSetCheckIntervalMs
-                    if (shouldCheck) {
+                    val shouldForceUpdate = now - lastRuleSetCheckMs >= ruleSetCheckIntervalMs
+                    if (shouldForceUpdate) {
                         lastRuleSetCheckMs = now
-                        val ruleSetRepo = RuleSetRepository.getInstance(this@SingBoxService)
-                        val allReady = ruleSetRepo.ensureRuleSetsReady(allowNetwork = false) { progress ->
-                            Log.v(TAG, "Rule set update: $progress")
-                        }
-                        if (!allReady) {
-                            Log.w(TAG, "Some rule sets are not ready, proceeding with available cache")
-                        }
+                    }
+                    // Always allow network download if rule sets are missing
+                    val allReady = ruleSetRepo.ensureRuleSetsReady(
+                        forceUpdate = shouldForceUpdate,
+                        allowNetwork = true
+                    ) { progress ->
+                        Log.v(TAG, "Rule set update: $progress")
+                    }
+                    if (!allReady) {
+                        Log.w(TAG, "Some rule sets are not ready, proceeding with available cache")
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to update rule sets", e)

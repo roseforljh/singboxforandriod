@@ -109,6 +109,35 @@ class RuleSetRepository(private val context: Context) {
     }
 
     /**
+     * 预下载指定规则集（用于添加时立刻拉取，避免启动阶段阻塞）
+     */
+    suspend fun prefetchRuleSet(
+        ruleSet: RuleSet,
+        forceUpdate: Boolean = false,
+        allowNetwork: Boolean = true
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (!ruleSet.enabled) return@withContext true
+
+        return@withContext when (ruleSet.type) {
+            RuleSetType.LOCAL -> File(ruleSet.path).exists()
+            RuleSetType.REMOTE -> {
+                val file = getRuleSetFile(ruleSet.tag)
+                if (!file.exists()) {
+                    installBaselineRuleSet(ruleSet.tag, file)
+                }
+                if (!allowNetwork) {
+                    file.exists()
+                } else if (!file.exists() || (forceUpdate && isExpired(file))) {
+                    val success = downloadCustomRuleSet(ruleSet)
+                    success || file.exists()
+                } else {
+                    true
+                }
+            }
+        }
+    }
+
+    /**
      * 从 assets 安装基础规则集
      */
     private fun installBaselineRuleSet(tag: String, targetFile: File): Boolean {

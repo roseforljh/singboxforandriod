@@ -16,6 +16,7 @@ import com.kunk.singbox.model.LatencyTestMethod
 import com.kunk.singbox.model.VpnAppMode
 import com.kunk.singbox.model.VpnRouteMode
 import com.kunk.singbox.model.GhProxyMirror
+import com.kunk.singbox.repository.RuleSetRepository
 import com.kunk.singbox.repository.SettingsRepository
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -25,6 +26,7 @@ import kotlinx.coroutines.launch
 class SettingsViewModel(application: Application) : AndroidViewModel(application) {
     
     private val repository = SettingsRepository.getInstance(application)
+    private val ruleSetRepository = RuleSetRepository.getInstance(application)
     
     val settings: StateFlow<AppSettings> = repository.settings
         .stateIn(
@@ -211,7 +213,13 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             } else {
                 currentSets.add(ruleSet)
                 repository.setRuleSets(currentSets)
-                onResult(true, "已添加规则集 \"${ruleSet.tag}\"")
+
+                val downloadOk = ruleSetRepository.prefetchRuleSet(ruleSet, forceUpdate = false, allowNetwork = true)
+                if (downloadOk) {
+                    onResult(true, "已添加规则集 \"${ruleSet.tag}\"，并完成下载")
+                } else {
+                    onResult(true, "已添加规则集 \"${ruleSet.tag}\"，但下载失败（稍后可手动更新）")
+                }
             }
         }
     }
@@ -219,16 +227,24 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     fun addRuleSets(ruleSets: List<RuleSet>, onResult: (Int) -> Unit = { _ -> }) {
         viewModelScope.launch {
             val currentSets = repository.getRuleSets().toMutableList()
-            var addedCount = 0
+            val addedRuleSets = mutableListOf<RuleSet>()
+
             ruleSets.forEach { ruleSet ->
                 val exists = currentSets.any { it.tag == ruleSet.tag && it.url == ruleSet.url }
                 if (!exists) {
                     currentSets.add(ruleSet)
-                    addedCount++
+                    addedRuleSets.add(ruleSet)
                 }
             }
+
             repository.setRuleSets(currentSets)
-            onResult(addedCount)
+
+            // Best-effort prefetch for newly added rule sets.
+            addedRuleSets.forEach { ruleSet ->
+                ruleSetRepository.prefetchRuleSet(ruleSet, forceUpdate = false, allowNetwork = true)
+            }
+
+            onResult(addedRuleSets.size)
         }
     }
 

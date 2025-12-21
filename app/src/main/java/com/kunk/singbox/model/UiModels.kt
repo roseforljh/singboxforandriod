@@ -1,25 +1,35 @@
 package com.kunk.singbox.model
 
+import androidx.annotation.Keep
 import androidx.compose.runtime.Immutable
+import com.google.gson.annotations.SerializedName
 
+@Keep
 @Immutable
 data class ProfileUi(
-    val id: String,
-    val name: String,
-    val type: ProfileType,
-    val url: String?,
-    val lastUpdated: Long,
-    val enabled: Boolean,
-    val autoUpdateInterval: Int = 0, // 0 means disabled, minutes
-    val updateStatus: UpdateStatus = UpdateStatus.Idle
+    @SerializedName("id") val id: String,
+    @SerializedName("name") val name: String,
+    @SerializedName("type") val type: ProfileType,
+    @SerializedName("url") val url: String?,
+    @SerializedName("lastUpdated") val lastUpdated: Long,
+    @SerializedName("enabled") val enabled: Boolean,
+    @SerializedName("autoUpdateInterval") val autoUpdateInterval: Int = 0, // 0 means disabled, minutes
+    @SerializedName("updateStatus") val updateStatus: UpdateStatus = UpdateStatus.Idle
 )
 
+@Keep
 enum class ProfileType {
-    Subscription, LocalFile, Imported
+    @SerializedName("Subscription") Subscription,
+    @SerializedName("LocalFile") LocalFile,
+    @SerializedName("Imported") Imported
 }
 
+@Keep
 enum class UpdateStatus {
-    Idle, Updating, Success, Failed
+    @SerializedName("Idle") Idle,
+    @SerializedName("Updating") Updating,
+    @SerializedName("Success") Success,
+    @SerializedName("Failed") Failed
 }
 
 /**
@@ -86,16 +96,17 @@ data class BatchUpdateResult(
 }
 
 @Immutable
+@Keep
 data class NodeUi(
-    val id: String,
-    val name: String,
-    val protocol: String,
-    val group: String,
-    val regionFlag: String? = null,
-    val latencyMs: Long? = null, // null means not tested
-    val isFavorite: Boolean = false,
-    val sourceProfileId: String,
-    val tags: List<String> = emptyList()
+    @SerializedName("id") val id: String,
+    @SerializedName("name") val name: String,
+    @SerializedName("protocol") val protocol: String,
+    @SerializedName("group") val group: String,
+    @SerializedName("regionFlag") val regionFlag: String? = null,
+    @SerializedName("latencyMs") val latencyMs: Long? = null, // null means not tested
+    @SerializedName("isFavorite") val isFavorite: Boolean = false,
+    @SerializedName("sourceProfileId") val sourceProfileId: String,
+    @SerializedName("tags") val tags: List<String> = emptyList()
 ) {
     val displayName: String
         get() = name

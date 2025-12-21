@@ -2536,6 +2536,7 @@ class ConfigRepository(private val context: Context) {
         val dnsRules = mutableListOf<DnsRule>()
 
         // 0. Bootstrap DNS (必须是 IP，用于解析其他 DoH/DoT 域名)
+        // 使用多个 IP 以提高可靠性
         dnsServers.add(
             DnsServer(
                 tag = "dns-bootstrap",
@@ -2544,7 +2545,16 @@ class ConfigRepository(private val context: Context) {
                 strategy = "ipv4_only"
             )
         )
-
+        dnsServers.add(
+            DnsServer(
+                tag = "dns-bootstrap-backup",
+                address = "119.29.29.29", // DNSPod IP
+                detour = "direct",
+                strategy = "ipv4_only"
+            )
+        )
+        // 也可以使用一个多地址的 Server (如果内核支持)
+        
         // 1. 本地 DNS
         val localDnsAddr = settings.localDns.takeIf { it.isNotBlank() } ?: "https://dns.alidns.com/dns-query"
         dnsServers.add(
@@ -2553,20 +2563,30 @@ class ConfigRepository(private val context: Context) {
                 address = localDnsAddr,
                 detour = "direct",
                 strategy = mapDnsStrategy(settings.directDnsStrategy),
-                addressResolver = "dns-bootstrap" // 必须指定解析器
+                addressResolver = "dns-bootstrap"
             )
         )
 
         // 2. 远程 DNS (走代理)
+        val remoteDnsAddr = settings.remoteDns.takeIf { it.isNotBlank() } ?: "https://dns.google/dns-query"
         dnsServers.add(
             DnsServer(
                 tag = "remote",
-                address = settings.remoteDns,
+                address = remoteDnsAddr,
                 detour = "PROXY",
                 strategy = mapDnsStrategy(settings.remoteDnsStrategy),
                 addressResolver = "dns-bootstrap" // 必须指定解析器
             )
         )
+
+        if (settings.fakeDnsEnabled) {
+            dnsServers.add(
+                DnsServer(
+                    tag = "fakeip-dns",
+                    address = "fakeip"
+                )
+            )
+        }
 
         // 3. 备用公共 DNS (直接连接，用于 bootstrap 和兜底)
         dnsServers.add(
@@ -2594,6 +2614,39 @@ class ConfigRepository(private val context: Context) {
             )
         )
 
+        // 优化：代理类域名的 DNS 处理
+        val proxyRuleSets = mutableListOf<String>()
+        val possibleProxyTags = listOf(
+            "geosite-geolocation-!cn", "geosite-google", "geosite-openai", 
+            "geosite-youtube", "geosite-telegram", "geosite-github", 
+            "geosite-twitter", "geosite-netflix", "geosite-apple",
+            "geosite-facebook", "geosite-instagram", "geosite-tiktok",
+            "geosite-disney", "geosite-microsoft", "geosite-amazon"
+        )
+        possibleProxyTags.forEach { tag ->
+            if (settings.ruleSets.any { it.tag == tag }) proxyRuleSets.add(tag)
+        }
+
+        if (proxyRuleSets.isNotEmpty()) {
+            if (settings.fakeDnsEnabled) {
+                // 如果开启了 FakeIP，代理域名必须返回 FakeIP 以支持域名分流规则
+                dnsRules.add(
+                    DnsRule(
+                        ruleSet = proxyRuleSets,
+                        server = "fakeip-dns"
+                    )
+                )
+            } else {
+                // 未开启 FakeIP，则使用远程 DNS
+                dnsRules.add(
+                    DnsRule(
+                        ruleSet = proxyRuleSets,
+                        server = "remote"
+                    )
+                )
+            }
+        }
+
         // 优化：直连/绕过类域名的 DNS 强制走 local
         val directRuleSets = mutableListOf<String>()
         if (settings.ruleSets.any { it.tag == "geosite-cn" }) directRuleSets.add("geosite-cn")
@@ -2607,64 +2660,12 @@ class ConfigRepository(private val context: Context) {
             )
         }
         
-        // 优化：代理类域名的 DNS 强制走 remote
-        val proxyRuleSets = mutableListOf<String>()
-        val possibleProxyTags = listOf(
-            "geosite-geolocation-!cn", "geosite-google", "geosite-openai", 
-            "geosite-youtube", "geosite-telegram", "geosite-github", 
-            "geosite-twitter", "geosite-netflix", "geosite-apple"
-        )
-        possibleProxyTags.forEach { tag ->
-            if (settings.ruleSets.any { it.tag == tag }) proxyRuleSets.add(tag)
-        }
-
-        if (proxyRuleSets.isNotEmpty()) {
-            dnsRules.add(
-                DnsRule(
-                    ruleSet = proxyRuleSets,
-                    server = "remote"
-                )
-            )
-        }
-
-        // Fake DNS
-        // 注意：必须放在 direct/proxy 的 DNS 规则之后，否则会抢占所有 A/AAAA 查询，导致 local/remote 分流规则失效。
-        // 对于旧版 sing-box (v1.8.0以前或某些定制版)，fakeip 可能配置在 DNS 全局选项中，
-        // 而不是作为单独的 server 类型。
-        // 我们尝试同时兼容：
-        // 1. 在 DnsConfig.fakeip 中设置配置（旧版）
-        // 2. 如果内核支持，它会读取 global fakeip 配置。
-        // 3. 路由规则中 server="fakeip" 可能不再适用，如果内核不识别 server tag "fakeip"。
-        //    但旧版中通常 global fakeip 开启后，如果规则没有匹配到具体 server，且 fakeip enabled，
-        //    它可能会自动处理？或者我们需要一个特殊的 server tag？
-        
-        // 实际上，如果旧版 fakeip 是全局选项，那么通常需要配合 dns rule server="fakeip" 来使用吗？
-        // 在 v1.7 中：
-        // "dns": {
-        //   "fakeip": { "enabled": true, "inet4_range": "..." }
-        // }
-        // 并且规则可以使用 "server": "fakeip" (这是保留字吗？)
-        // 或者根本不需要 server="fakeip" 规则，而是只要查询没有命中其他规则，且是 A/AAAA，
-        // 并且 fakeip 开启，它就会返回 fakeip？
-        
-        // 为了稳妥，我们配置全局 fakeip，并保留一条兜底规则指向 "fakeip" (如果内核支持)。
-        // 如果内核不支持 server="fakeip"，这条规则可能会报错吗？
-        // 如果我们不加 server，只加 global fakeip config，sing-box 如何知道哪些域名走 fakeip？
-        // 通常是 `query_type` 为 A/AAAA 且未命中其他规则。
-        
-        val fakeIpConfig = if (settings.fakeDnsEnabled) {
-            DnsFakeIpConfig(
-                enabled = true,
-                inet4Range = settings.fakeIpRange
-            )
-        } else null
-
+        // Fake DNS 兜底
         if (settings.fakeDnsEnabled) {
-            // 尝试添加规则指向保留字 "fakeip"
             dnsRules.add(
                 DnsRule(
                     queryType = listOf("A", "AAAA"),
-                    server = "fakeip"
+                    server = "fakeip-dns"
                 )
             )
         }
@@ -2672,7 +2673,7 @@ class ConfigRepository(private val context: Context) {
         val dns = DnsConfig(
             servers = dnsServers,
             rules = dnsRules,
-            finalServer = "local", // 兜底使用本地 DNS，保证基础联网不卡死
+            finalServer = "local", // 兜底使用本地 DNS
             strategy = mapDnsStrategy(settings.dnsStrategy),
             disableCache = !settings.dnsCacheEnabled,
             independentCache = true,
@@ -2988,7 +2989,7 @@ class ConfigRepository(private val context: Context) {
         val allRules = listOf(
             // DNS 流量走 dns-out
             RouteRule(protocol = listOf("dns"), outbound = "dns-out")
-        ) + quicRule + bypassLanRules + appRoutingRules + adBlockRules + customRuleSetRules
+        ) + quicRule + bypassLanRules + customRuleSetRules + adBlockRules + appRoutingRules
         
         // 记录所有生成的路由规则
         Log.v(TAG, "=== Generated Route Rules (${allRules.size} total) ===")

@@ -1313,9 +1313,39 @@ class SingBoxService : VpnService() {
                         try {
                             val box = boxService
                             if (box != null) {
-                                // libbox 1.12+ common API for retrieving selected outbound in a group
-                                val group = box.getOutboundGroup("PROXY")
-                                val selected = group?.selected
+                                // Try to find getOutboundGroup or similar method via reflection to avoid compile error
+                                // while supporting different libbox versions
+                                val boxClass = box.javaClass
+                                var selected: String? = null
+                                
+                                // Attempt 1: getOutboundGroup (newer sing-box/libbox versions)
+                                val getOutboundGroupMethod = boxClass.methods.find { 
+                                    it.name == "getOutboundGroup" && it.parameterTypes.size == 1 && it.parameterTypes[0] == String::class.java 
+                                }
+                                if (getOutboundGroupMethod != null) {
+                                    val group = getOutboundGroupMethod.invoke(box, "PROXY")
+                                    if (group != null) {
+                                        val selectedField = group.javaClass.methods.find { it.name == "getSelected" || it.name == "selected" }
+                                        selected = selectedField?.invoke(group) as? String
+                                    }
+                                }
+                                
+                                // Attempt 2: getTracker (NB4A style)
+                                if (selected.isNullOrBlank()) {
+                                    val getTrackerMethod = boxClass.methods.find { it.name == "getTracker" }
+                                    val tracker = getTrackerMethod?.invoke(box)
+                                    if (tracker != null) {
+                                        val getOutboundGroupOnTracker = tracker.javaClass.methods.find {
+                                            it.name == "getOutboundGroup" && it.parameterTypes.size == 1 && it.parameterTypes[0] == String::class.java
+                                        }
+                                        val group = getOutboundGroupOnTracker?.invoke(tracker, "PROXY")
+                                        if (group != null) {
+                                            val selectedField = group.javaClass.methods.find { it.name == "getSelected" || it.name == "selected" }
+                                            selected = selectedField?.invoke(group) as? String
+                                        }
+                                    }
+                                }
+                                
                                 if (!selected.isNullOrBlank() && selected != realTimeNodeName) {
                                     realTimeNodeName = selected
                                     Log.i(TAG, "Observed outbound change: $selected")
